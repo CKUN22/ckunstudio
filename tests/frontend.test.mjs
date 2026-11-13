@@ -72,3 +72,16 @@ test('主页只包含四个个人工作区，未认领团队任务不显示',asy
  const ui=browserHarness();await ui.run("user={id:'member',role:'member'};users=[];items=await api('/api/items');renderWork();");const html=ui.nodes.get('#content').innerHTML;
  for(const label of ['我负责的','等待他人的','即将到期','已逾期'])assert.ok(html.includes(label));assert.equal((html.match(/class="work-section"/g)||[]).length,4);assert.doesNotMatch(html,/task-pool|pool-card|团队任务|publish-task/);
 });
+
+
+test('任务与 BUG 显示认领和本人取消入口，其他成员及草稿没有取消按钮',()=>{
+ const ui=browserHarness();ui.run("user={id:'member',role:'member'};users=[];");
+ for(const kind of ['task','bug']){
+  const open=ui.run(`claimButton({id:'sample',kind:'${kind}',status:'doing',assignee:''})`);assert.match(open,/data-claim="sample"/);assert.ok(open.includes(kind==='task'?'认领任务':'认领BUG'));
+  assert.match(ui.run(`claimButton({id:'sample',kind:'${kind}',status:'doing',assignee:'member'})`),/data-release="true".*取消认领/);
+  assert.equal(ui.run(`claimButton({id:'sample',kind:'${kind}',status:'doing',assignee:'other'})`),'');assert.equal(ui.run(`claimButton({id:'sample',kind:'${kind}',status:'done',assignee:'member'})`),'');
+ }
+ assert.equal(ui.run("claimButton({id:'idea',kind:'idea',status:'todo',assignee:''})"),'');
+ assert.equal(ui.run("ownerClass({assignee:'member',assigneeColor:1})"),'owner-color-1');assert.equal(ui.run("ownerClass({assignee:'',assigneeColor:null})"),'');
+ const bug=ui.run("kind='bug';editing={id:'sample'};editorMeta({id:'sample',kind:'bug',assignee:'member',status:'doing',tags:[],priority:'normal',due:''})");assert.match(bug,/取消认领/);assert.match(bug,/type="hidden" name="assignee"/);assert.doesNotMatch(bug,/<select name="assignee"/);
+});

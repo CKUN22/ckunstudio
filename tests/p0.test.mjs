@@ -45,6 +45,23 @@ for(const local of [true,false])test(`P0 全流程：${local?'本地':'Cloudflar
  const revisedIdea=await req('/items/'+minimalIdea.data.id,member,'PUT',{...minimalIdea.data,body:'三段跳试验',keepImages:[],newImages:[]});assert.equal(revisedIdea.status,200);assert.equal(revisedIdea.data.created,minimalIdea.data.created);assert.ok(Date.parse(revisedIdea.data.updated)>=Date.parse(minimalIdea.data.updated));assert.deepEqual(revisedIdea.data.tags,['玩法设计','待验证']);
  assert.equal((await req('/items',member,'POST',{kind:'bug',title:'不匹配的标签',tags:['玩法设计']})).status,400);
  const image='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=';
+ for(const claimKind of ['task','bug']){
+  const created=await req('/items',captain,'POST',{kind:claimKind,title:claimKind+'认领撤回流程',body:'保留正文',status:'doing',tags:claimKind==='task'?['程序']:['碰撞/物理'],progress:'完成一半',remaining:'复测',eta:'2026-12-01T10:00:00Z',newImages:[image]});assert.equal(created.status,201);
+  const item=created.data,path='/items/'+item.id+'/claim';
+  await req('/items/'+item.id+'/follow',observer,'POST',{});
+  assert.equal((await req(path,'','DELETE',{version:item.version})).status,401);
+  const take=await req(path,member,'POST',{version:item.version});assert.equal(take.status,200);assert.equal(take.data.assignee,second.data.user.id);
+  assert.equal((await req(path,observer,'DELETE',{version:take.data.version})).status,403);assert.equal((await req(path,captain,'DELETE',{version:take.data.version})).status,403);
+  assert.equal((await req('/items/'+item.id,observer,'PUT',{...take.data,assignee:third.data.user.id,keepImages:take.data.images,newImages:[]})).status,403);
+  assert.equal((await req(path,member,'DELETE',{version:item.version})).status,409);
+  const results=await Promise.all([1,2].map(()=>req(path,member,'DELETE',{version:take.data.version})));assert.deepEqual(results.map(x=>x.status).sort(),[200,409]);const freed=results.find(x=>x.status===200).data;
+  assert.equal(freed.assignee,'');assert.equal(freed.assigneeColor,null);assert.equal(freed.status,'doing');assert.equal(freed.progress,'完成一半');assert.equal(freed.remaining,'复测');assert.equal(freed.eta,'2026-12-01T10:00:00.000Z');assert.deepEqual(freed.images,item.images);assert.deepEqual(freed.tags,item.tags);assert.equal(freed.created,item.created);
+  assert.equal(sql.prepare("SELECT count(*) n FROM studio_activity WHERE event='unclaim' AND target=?").get(item.id).n,1);
+  assert.equal((await req(path,member,'POST',{version:take.data.version})).status,409);
+  const next=await req(path,observer,'POST',{version:freed.version});assert.equal(next.status,200);assert.equal(next.data.assignee,third.data.user.id);assert.equal((await req(path,member,'DELETE',{version:next.data.version})).status,403);
+  const done=await req('/items/'+item.id,observer,'PUT',{...next.data,status:'done',keepImages:next.data.images,newImages:[]});assert.equal(done.status,200);assert.equal((await req(path,observer,'DELETE',{version:done.data.version})).status,409);
+ }
+ const noClaim=await req('/items',captain,'POST',{kind:'idea',title:'草稿不可认领'});assert.equal((await req('/items/'+noClaim.data.id+'/claim',member,'POST',{version:noClaim.data.version})).status,400);assert.equal((await req('/items/'+noClaim.data.id+'/claim',member,'DELETE',{version:noClaim.data.version})).status,400);
  const base={kind:'task',title:'前置关卡',body:'测试',status:'todo',priority:'high',assignee:second.data.user.id,due:'',newImages:[image],eta:'2026-01-01T12:30:00+08:00',progress:'地形完成',remaining:'敌人点位',eta_reason:'估算',dependencies:[]};
  const a=await req('/items',member,'POST',base);assert.equal(a.status,201,JSON.stringify(a.data));assert.equal(a.data.eta,'2026-01-01T04:30:00.000Z');assert.equal(a.data.author,second.data.user.id);
  const b=await req('/items',captain,'POST',{...base,title:'下游敌人',assignee:third.data.user.id,status:'blocked',blocked_reason:'等待关卡',dependencies:[a.data.id],newImages:[]});assert.equal(b.status,201,JSON.stringify(b.data));assert.equal(b.data.status,'blocked');

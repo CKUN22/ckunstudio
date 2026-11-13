@@ -36,7 +36,7 @@ function renderList(){activatePage('list',labels[kind][0]);document.querySelecto
 function updateList(){if(page!=='list')return;if(kind==='idea'){updateIdeas();return;}const all=items.filter(x=>x.kind===kind), filtered=all.filter(x=>(filter==='all'||x.status===filter)&&(!owner||x.assignee===owner)&&`${x.title} ${x.body} ${(x.tags||[]).join(' ')}`.toLowerCase().includes(search.toLowerCase()));
   updateNavCounts();
   document.querySelector('#stats').innerHTML=[[all.filter(x=>x.status!=='done').length,'未完成'],[all.filter(x=>x.status==='doing').length,'处理中'],[all.filter(x=>x.status==='done').length,'已完成']].map(([number,label])=>`<div class="stat"><b>${number}</b><span>${label}</span></div>`).join('');
-  document.querySelector('#rows').innerHTML=filtered.length?filtered.map(x=>{const name=users.find(u=>u.id===x.assignee)?.name||x.assigneeName;return `<div class="row ${ownerClass(x)}" tabindex="0" role="button" data-id="${x.id}" aria-label="打开 ${esc(x.title)}"><div class="title-wrap"><span class="item-icon">${labels[kind][3]}</span><div class="title-content"><div class="row-title">${esc(x.title)} ${tagBadges(x)}</div><div class="row-meta">${x.imageCount?'▧ '+x.imageCount+' 张图片 · ':''}${esc(x.progress||x.body.slice(0,65)||'暂无详细描述')}<br>${esc([x.blocked_reason,dependencyLabel(x)].filter(Boolean).join('；'))}${x.eta?' · 预计 '+esc(timeLabel(x.eta)):''}${x.eta&&Date.parse(x.eta)<Date.now()&&x.status!=='done'?' · 预计已逾期':''}</div></div></div><span class="pill ${x.status}">• ${statuses[x.status]}</span><span class="priority ${x.priority}">${priorities[x.priority]}</span><span class="person">${avatar(name)}${esc(name||(kind==='task'?'待认领':'未分配'))}${claimButton(x)}</span><span class="date ${x.due&&x.due<new Date().toLocaleDateString('en-CA')&&x.status!=='done'?'overdue':''}">${dateLabel(x.due)}</span></div>`;}).join(''):`<div class="empty"><div class="empty-icon">${labels[kind][3]}</div>${all.length?'没有符合筛选条件的记录':`还没有${labels[kind][2]}`}<p>${all.length?'试试调整搜索或筛选条件。':'点击右下角 +，记录团队的第一步。'}</p>${all.length?'':`<button class="secondary" id="empty-create">新建${labels[kind][2]}</button>`}</div>`;
+  document.querySelector('#rows').innerHTML=filtered.length?filtered.map(x=>{const name=users.find(u=>u.id===x.assignee)?.name||x.assigneeName;return `<div class="row ${ownerClass(x)}" tabindex="0" role="button" data-id="${x.id}" aria-label="打开 ${esc(x.title)}"><div class="title-wrap"><span class="item-icon">${labels[kind][3]}</span><div class="title-content"><div class="row-title">${esc(x.title)} ${tagBadges(x)}</div><div class="row-meta">${x.imageCount?'▧ '+x.imageCount+' 张图片 · ':''}${esc(x.progress||x.body.slice(0,65)||'暂无详细描述')}<br>${esc([x.blocked_reason,dependencyLabel(x)].filter(Boolean).join('；'))}${x.eta?' · 预计 '+esc(timeLabel(x.eta)):''}${x.eta&&Date.parse(x.eta)<Date.now()&&x.status!=='done'?' · 预计已逾期':''}</div></div></div><span class="pill ${x.status}">• ${statuses[x.status]}</span><span class="priority ${x.priority}">${priorities[x.priority]}</span><span class="person">${avatar(name)}${esc(name||'待认领')}${claimButton(x)}</span><span class="date ${x.due&&x.due<new Date().toLocaleDateString('en-CA')&&x.status!=='done'?'overdue':''}">${dateLabel(x.due)}</span></div>`;}).join(''):`<div class="empty"><div class="empty-icon">${labels[kind][3]}</div>${all.length?'没有符合筛选条件的记录':`还没有${labels[kind][2]}`}<p>${all.length?'试试调整搜索或筛选条件。':'点击右下角 +，记录团队的第一步。'}</p>${all.length?'':`<button class="secondary" id="empty-create">新建${labels[kind][2]}</button>`}</div>`;
   document.querySelector('#total').textContent=`显示 ${filtered.length} 条 / 共 ${all.length} 条记录`;
   document.querySelectorAll('[data-id]').forEach(row=>{row.onclick=()=>openEditor(row.dataset.id);row.onkeydown=e=>{if(e.target!==row)return;if(e.key==='Enter'||e.key===' '){e.preventDefault();openEditor(row.dataset.id);}};});document.querySelector('#empty-create')?.addEventListener('click',()=>openEditor());bindClaims();
 }
@@ -76,7 +76,11 @@ boot();
 
 function tagBadges(item){return (item.tags||[]).map(tag=>`<span class="task-tag">${esc(tag)}</span>`).join('');}
 function ownerClass(item){const color=item.assigneeColor??users.find(u=>u.id===item.assignee)?.color;return item.assignee&&Number.isInteger(color)?`owner-color-${color%12}`:'';}
-function claimButton(item){return item.kind==='task'&&!item.assignee&&item.status!=='done'?`<button class="secondary claim-button" type="button" data-claim="${item.id}">认领任务</button>`:'';}
+function claimButton(item){
+ if(!['task','bug'].includes(item.kind)||item.status==='done')return '';
+ if(!item.assignee)return `<button class="secondary claim-button" type="button" data-claim="${item.id}">认领${item.kind==='bug'?'BUG':'任务'}</button>`;
+ return item.assignee===user.id?`<button class="secondary claim-button" type="button" data-claim="${item.id}" data-release="true">取消认领</button>`:'';
+}
 function returnFromEditor(){if(editorReturn==='work')renderWork();else renderList();}
 function tagChoices(data){
  const groups=tagGroupsFor(kind),available=groups.flatMap(([,tags])=>tags);
@@ -91,14 +95,17 @@ function priorityField(data){return `<label class="field">优先级<select name=
 function editorMeta(data){
  if(!editing||kind==='idea')return tagChoices(data);
  const name=users.find(u=>u.id===data.assignee)?.name||data.assigneeName;
- const owner=kind==='task'?`<div class="field">执行人<div class="task-owner ${ownerClass(data)}">${esc(name||'待认领')}${claimButton(data)}</div><input type="hidden" name="assignee" value="${esc(data.assignee)}"></div>`:`<label class="field">执行人<select name="assignee"><option value="">暂未分配</option>${data.assignee&&!users.some(u=>u.id===data.assignee)?`<option value="${esc(data.assignee)}" selected>${esc(data.assigneeName||'历史成员')}（已移出）</option>`:''}${users.map(u=>`<option value="${u.id}" ${data.assignee===u.id?'selected':''}>${esc(u.name)}</option>`).join('')}</select></label>`;
- return `${tagChoices(data)}${statusField(data)}${kind==='task'?owner:''}<details class="advanced span-two"><summary>更多设置 · ${kind==='task'?'进度、优先级与依赖':'执行人、进度与时间'}</summary><div class="form-grid">${kind==='bug'?owner:''}${priorityField(data)}<label class="field">截止日期（选填）<input type="date" name="due" value="${esc(data.due)}"></label>${progressFields(data)}</div></details>`;
+ const owner=`<div class="field">执行人<div class="task-owner ${ownerClass(data)}">${esc(name||'待认领')}${claimButton(data)}</div><input type="hidden" name="assignee" value="${esc(data.assignee)}"></div>`;
+ return `${tagChoices(data)}${statusField(data)}${owner}<details class="advanced span-two"><summary>更多设置 · ${kind==='task'?'进度、优先级与依赖':'进度、优先级与时间'}</summary><div class="form-grid">${priorityField(data)}<label class="field">截止日期（选填）<input type="date" name="due" value="${esc(data.due)}"></label>${progressFields(data)}</div></details>`;
 }
 function bindClaims(){document.querySelectorAll('[data-claim]').forEach(button=>button.onclick=async event=>{
  event.stopPropagation();const id=button.dataset.claim,item=page==='editor'&&editing?.id===id?editing:items.find(x=>x.id===id);if(!item)return;
- if(dirty&&!await mayLeave())return;button.disabled=true;const returnTo=page;
- try{await api(`/api/items/${id}/claim`,{method:'POST',body:JSON.stringify({version:item.version})});dirty=false;items=await api('/api/items');if(returnTo==='editor')await openEditor(id);else if(returnTo==='work')renderWork();else updateList();toast('已认领，执行人已更新为你');}
- catch(e){toast(e.message);if(user){items=await api('/api/items');if(returnTo==='work')renderWork();else if(returnTo==='list')updateList();}}
+ const release=button.dataset.release==='true';
+ if(dirty&&!await mayLeave())return;
+ if(release&&!await confirmDialog('取消认领？','取消后执行人将清空，其他成员可以认领；已有状态、进度和附件保留。','取消认领'))return;
+ button.disabled=true;const returnTo=page;
+ try{await api(`/api/items/${id}/claim`,{method:release?'DELETE':'POST',body:JSON.stringify({version:item.version})});dirty=false;items=await api('/api/items');if(returnTo==='editor')await openEditor(id);else if(returnTo==='work')renderWork();else updateList();toast(release?'已取消认领，其他成员可以接手':'已认领，执行人已更新为你');}
+ catch(e){toast(e.message);if(user){try{items=await api('/api/items');if(returnTo==='work')renderWork();else if(returnTo==='list')updateList();else if(returnTo==='editor'&&!dirty)await openEditor(id);}catch(refreshError){toast(refreshError.message);}}}
  finally{button.disabled=false;}
  });}
 

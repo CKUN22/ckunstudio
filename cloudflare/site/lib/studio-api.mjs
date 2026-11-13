@@ -53,7 +53,7 @@ async function fieldsFor(db, data, existing) {
   if(!existing && ['task','bug','idea'].includes(data.kind)){data.status??='todo';data.assignee??='';data.priority??='normal';data.due??='';data.body??='';}
   if (!['task', 'bug', 'idea'].includes(data.kind) || !['todo', 'doing', 'done', 'blocked'].includes(data.status) || !['low', 'normal', 'high', 'urgent'].includes(data.priority)) fail(400, '类型或状态无效');
   const assignee = text(data.assignee, 80);
-  if(existing?.kind==='task'&&assignee!==existing.assignee)fail(403,'请通过认领操作成为任务执行人');
+  if(['task','bug'].includes(existing?.kind)&&assignee!==existing.assignee)fail(403,'请通过认领或取消认领操作修改执行人');
   if (assignee && assignee!==existing?.assignee && !await db.prepare('SELECT id FROM studio_users WHERE id=? AND active=1').bind(assignee).first()) fail(400, '执行人不存在');
   const due = text(data.due, 10);
   if (due && (!/^\d{4}-\d{2}-\d{2}$/.test(due) || !Number.isFinite(Date.parse(due)) || new Date(due).toISOString().slice(0, 10) !== due)) fail(400, '日期无效');
@@ -187,17 +187,19 @@ export async function onRequest(context) {
       const data=await readBody(request);await db.prepare("UPDATE studio_notifications SET read_at=? WHERE user_id=? AND (id=? OR ?='all')").bind(new Date().toISOString(),user.id,data.id||'',data.id||'').run();return json(200,{ok:true});
     }
     const claim=/^\/items\/([a-f0-9]+)\/claim$/.exec(route);
-    if(claim && request.method==='POST'){
-      const data=await readBody(request),existing=await getItem(db,claim[1]);
-      if(existing.kind!=='task')fail(400,'仅任务可以认领');
-      if(!Number.isInteger(data.version))fail(400,'请刷新后重新认领');
-      const now=new Date().toISOString(),mutation=random();
+    if(claim && ['POST','DELETE'].includes(request.method)){
+      const data=await readBody(request),existing=await getItem(db,claim[1]),release=request.method==='DELETE';
+      if(!['task','bug'].includes(existing.kind))fail(400,'仅任务和 BUG 可以认领或取消认领');
+      if(!Number.isInteger(data.version))fail(400,'请刷新后重新操作');
+      if(existing.version!==data.version)fail(409,'记录已更新，请刷新后重试');
+      if(release&&existing.assignee!==user.id)fail(403,'仅当前执行人可以取消认领');
+      const now=new Date().toISOString(),mutation=random(),assignee=release?'':user.id;
       const result=await db.batch([
-        db.prepare("UPDATE studio_items SET assignee=?,version=version+1,updated=?,mutation=? WHERE id=? AND version=? AND assignee='' AND status<>'done' AND EXISTS(SELECT 1 FROM studio_users WHERE id=? AND active=1) RETURNING id").bind(user.id,now,mutation,existing.id,data.version,user.id),
-        db.prepare("INSERT INTO studio_activity SELECT ?,?,'claim',?,? WHERE EXISTS(SELECT 1 FROM studio_items WHERE id=? AND mutation=?)").bind(random(),user.id,existing.id,now,existing.id,mutation)
+        db.prepare("UPDATE studio_items SET assignee=?,version=version+1,updated=?,mutation=? WHERE id=? AND version=? AND assignee=? AND status<>'done' AND kind IN ('task','bug') AND EXISTS(SELECT 1 FROM studio_users WHERE id=? AND active=1) RETURNING id").bind(assignee,now,mutation,existing.id,data.version,release?user.id:'',user.id),
+        db.prepare('INSERT INTO studio_activity SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM studio_items WHERE id=? AND mutation=?)').bind(random(),user.id,release?'unclaim':'claim',existing.id,now,existing.id,mutation)
       ]);
-      if(!result[0].results.length)fail(409,'任务已被认领或更新，请刷新后查看');
-      await changeNotifications(db,user,existing.id,{...existing,assignee:user.id},existing);
+      if(!result[0].results.length)fail(409,'记录已被认领、完成或更新，请刷新后查看');
+      await changeNotifications(db,user,existing.id,{...existing,assignee},existing);
       return json(200,localItem(publicItem(await getItem(db,existing.id)),env));
     }
     const follow=/^\/items\/([a-f0-9]+)\/follow$/.exec(route);
