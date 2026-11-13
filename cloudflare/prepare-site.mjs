@@ -1,5 +1,7 @@
 import { readFile, writeFile, mkdir, cp, access } from 'node:fs/promises';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
+const revision = value => createHash('sha256').update(value).digest('hex').slice(0,12);
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -17,6 +19,8 @@ js = js.replace(readerExpression, 'files.map(prepareImage)');
 js = (await readFile(path.join(here, 'image-upload.js'), 'utf8')) + '\n' + js;
 js = js.replace('最多 5 张，总大小不超过 8MB', '最多 5 张，每张 512KB；大图自动压缩');
 js = js.replaceAll('/api/', '/ckunstudio/api/');
+const catalogHash=revision(await readFile(path.join(staged,'lib/task-catalog.mjs')));
+js=js.replace("'./task-catalog.js'","'./task-catalog.js?v="+catalogHash+"'");
 js = js.replace("authMode='login', refreshTimer", "authMode='login', setupKeyRequired=false, refreshTimer");
 js = js.replace("if(setup.needsSetup){authMode='setup';", "if(setup.needsSetup){setupKeyRequired=setup.setupKeyRequired===true;authMode='setup';");
 js = js.replace('<div id="auth-error"', '${setup&&setupKeyRequired?\'<label class="field">团队初始化密钥<input name="setupKey" type="password" required autocomplete="off" placeholder="由网站管理员在 Cloudflare 设置"></label>\':\'\'}<div id="auth-error"');
@@ -25,7 +29,8 @@ js = js.replaceAll('Studio Flow', 'CKUN STUDIO');
 js = js.replace('<div class="workspace">团队工作空间</div>', '<div class="workspace">团队工作空间 · <a href="/">返回首页 ↗</a></div>');
 await writeFile(path.join(assets, 'app.js'), js);
 let html = await readFile(path.join(appRoot, 'public/index.html'), 'utf8');
-html = html.replace('/style.css', '/ckunstudio/style.css').replace('/app.js', '/ckunstudio/app.js').replace('Studio Flow · 团队协作', 'CKUN STUDIO · 团队协作').replace('<title>', '<meta name="robots" content="noindex,nofollow"><title>');
+const styleHash=revision(await readFile(path.join(appRoot,'public/style.css')));
+html = html.replace('/style.css', '/ckunstudio/style.css?v='+styleHash).replace('/app.js', '/ckunstudio/app.js?v='+revision(js)).replace('Studio Flow · 团队协作', 'CKUN STUDIO · 团队协作').replace('<title>', '<meta name="robots" content="noindex,nofollow"><title>');
 await writeFile(path.join(assets, 'index.html'), html);
 await cp(path.join(appRoot, 'public/style.css'), path.join(assets, 'style.css'));
 

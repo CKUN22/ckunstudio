@@ -23,7 +23,7 @@ async function prepareImage(file) {
   } finally { bitmap.close(); }
 }
 
-import { TASK_TAG_GROUPS, COMMON_TASK_TAGS, MAX_TASK_TAGS, normalizeItem } from './task-catalog.js';
+import { TASK_TAG_GROUPS, COMMON_TASK_TAGS, MAX_TASK_TAGS, normalizeItem } from './task-catalog.js?v=f2ad46adc063';
 const app = document.querySelector('#app');
 const labels = {task:['任务协作','让每一次推进，都清晰可见。','任务','▤'],bug:['BUG 报告','发现问题，记录现场，一起把体验打磨得更好。','BUG','⌘'],idea:['草稿与思路','留住灵感，让好想法有处安放。','思路','◇']};
 const statuses = {todo:'未开始',doing:'处理中',blocked:'被阻塞',done:'已完成'};
