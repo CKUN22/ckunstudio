@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 const base=process.argv[2]||'http://127.0.0.1:8799';
 if(!['127.0.0.1','localhost','[::1]'].includes(new URL(base).hostname))throw new Error('P0 smoke tests only run on localhost');
-const prefix=base+'/ckunstudio/api',password='local-p0-smoke-only-123456',suffix=Date.now();
+const prefix=base+'/ckunstudio/api',password=process.env.STUDIO_SMOKE_PASSWORD||'local-p0-smoke-only-123456',captainName=process.env.STUDIO_SMOKE_CAPTAIN_NAME||'P0运行时队长',suffix=Date.now();
 async function req(route,cookie='',method='GET',data){const res=await fetch(prefix+route,{method,headers:{'Content-Type':'application/json',Cookie:cookie},...(data?{body:JSON.stringify(data)}:{})});return {status:res.status,data:res.headers.get('content-type')?.includes('json')?await res.json():await res.arrayBuffer(),cookie:res.headers.get('set-cookie')?.split(';')[0]};}
 const setup=await req('/setup');assert.equal(setup.status,200,JSON.stringify(setup.data));
-const first=await req(setup.data.needsSetup?'/setup':'/login','','POST',{name:'P0运行时队长',password,setupKey:'local-setup-key-do-not-use-in-production'});assert.ok([200,201].includes(first.status),JSON.stringify(first.data));const captain=first.cookie;
+const first=await req(setup.data.needsSetup?'/setup':'/login','','POST',{name:captainName,password,setupKey:'local-setup-key-do-not-use-in-production'});assert.ok([200,201].includes(first.status),JSON.stringify(first.data));const captain=first.cookie;
 const invite=await req('/invites',captain,'POST',{days:1,maxUses:2});assert.equal(invite.status,201,JSON.stringify(invite.data));
 const second=await req('/register','','POST',{name:'P0运行时成员'+suffix,password,invite:invite.data.code});assert.equal(second.status,200,JSON.stringify(second.data));const member=second.cookie;
 assert.equal((await req('/invites',member)).status,403);assert.equal((await req('/me',member)).data.invite,undefined);

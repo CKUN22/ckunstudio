@@ -1,6 +1,6 @@
 # CKUN STUDIO · 免费测试版部署
 
-目标地址：**https://ckun.cc/ckunstudio**。API：`/ckunstudio/api/`。使用现有 Cloudflare Pages 项目 `gerenzhan`，由 `/CK_STUDIO` 页面提供“团队协作”入口。
+目标地址：**https://ckun.cc/ckunstudio**。API：`/ckunstudio/api/`。使用现有 Cloudflare Pages 项目 `gerenzhan`，由首页 `/` 的“团队协作”按钮提供入口，直接跳转 `/ckunstudio/`；`/CK_STUDIO/` 不再放置协作入口。
 
 2026 年 11 月 13 日已发布免费测试版，并验证正式域名页面及接口正常。首次使用请按下文创建团队。
 

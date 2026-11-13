@@ -43,8 +43,8 @@ assert.equal((await request('/items',{cookie,method:'POST',data:{...payload,due:
 const current=await request(`/items/${record.id}`,{cookie});assert.equal((await request(`/items/${record.id}`,{cookie,method:'PUT',data:{...payload,version:current.data.version,keepImages:[],newImages:[]}})).status,200);
 assert.equal((await fetch(url,{headers:{Cookie:cookie2}})).status,404);
 for(const id of temporary){const item=await request(`/items/${id}`,{cookie});assert.equal((await request(`/items/${id}`,{cookie,method:'DELETE',data:{version:item.data.version}})).status,200);}
-const home=await fetch(base+'/');assert.equal(home.status,200);assert.ok((await home.text()).includes('CKUN'));
-const studio=await fetch(base+'/CK_STUDIO');assert.equal(studio.status,200);assert.ok((await studio.text()).includes('href="/ckunstudio"'));
+const home=await fetch(base+'/');assert.equal(home.status,200);const homeText=await home.text();assert.ok(homeText.includes('CKUN'));assert.match(homeText,/href="\/ckunstudio\/"/);
+const studio=await fetch(base+'/CK_STUDIO');assert.equal(studio.status,200);assert.doesNotMatch(await studio.text(),/href="\/ckunstudio\/?"/);
 const app=await fetch(base+'/ckunstudio');assert.equal(app.status,200);assert.match(app.headers.get('content-security-policy'),/frame-ancestors 'none'/);assert.ok((await app.text()).includes('/ckunstudio/app.js'));
 assert.equal((await fetch(base+'/ckunstudio/app.js')).status,200);assert.equal((await fetch(base+'/ckunstudio/style.css')).status,200);
 assert.equal((await fetch(base+'/privacy/moshumiyin/')).status,200);

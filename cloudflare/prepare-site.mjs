@@ -22,7 +22,7 @@ js = js.replace("if(setup.needsSetup){authMode='setup';", "if(setup.needsSetup){
 js = js.replace('<div id="auth-error"', '${setup&&setupKeyRequired?\'<label class="field">团队初始化密钥<input name="setupKey" type="password" required autocomplete="off" placeholder="由网站管理员在 Cloudflare 设置"></label>\':\'\'}<div id="auth-error"');
 js = js.replace('首次启动，请创建你的账号。', '首次启动，请使用管理员密钥创建团队。');
 js = js.replaceAll('Studio Flow', 'CKUN STUDIO');
-js = js.replace('<div class="workspace">团队工作空间</div>', '<div class="workspace">团队工作空间 · <a href="/CK_STUDIO">返回官网 ↗</a></div>');
+js = js.replace('<div class="workspace">团队工作空间</div>', '<div class="workspace">团队工作空间 · <a href="/">返回首页 ↗</a></div>');
 await writeFile(path.join(assets, 'app.js'), js);
 let html = await readFile(path.join(appRoot, 'public/index.html'), 'utf8');
 html = html.replace('/style.css', '/ckunstudio/style.css').replace('/app.js', '/ckunstudio/app.js').replace('Studio Flow · 团队协作', 'CKUN STUDIO · 团队协作').replace('<title>', '<meta name="robots" content="noindex,nofollow"><title>');
@@ -42,10 +42,21 @@ if (destination) {
   }
   await cp(path.join(staged, 'wrangler.studio.local.jsonc'), path.join(destination, 'wrangler.studio.local.jsonc'));
   const studioPage = path.join(destination, 'src/pages/CK_STUDIO.astro');
-  let source = await readFile(studioPage, 'utf8');
-  if (!source.includes('href="/ckunstudio"')) {
-    source = source.replace('<nav aria-label="工作室导航">', '<nav aria-label="工作室导航"><a href="/ckunstudio">团队协作 <span aria-hidden="true">↗</span></a>');
-    await writeFile(studioPage, source);
+  const studioSource = await readFile(studioPage, 'utf8');
+  const cleanStudio = studioSource.replace(/<a\b[^>]*href=["']\/ckunstudio\/?["'][^>]*>[\s\S]*?<\/a>/g, '');
+  if(cleanStudio!==studioSource)await writeFile(studioPage,cleanStudio);
+  const homePage=path.join(destination,'src/pages/index.astro');
+  let homeSource=await readFile(homePage,'utf8');
+  if(!homeSource.includes('data-studio-entry')){
+    const aboutLink=/(<a class="btn btn-outline" href="\/about\/">[\s\S]*?<\/a>)/;
+    if(!aboutLink.test(homeSource))throw new Error('Homepage hero changed; review the studio entry placement');
+    homeSource=homeSource.replace(aboutLink,`$1
+        <a class="btn btn-outline" href="/ckunstudio/" data-studio-entry aria-label="进入 CKUN STUDIO 团队协作">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M8 4v16M12 9h5M12 13h5" /></svg>
+          团队协作 <span aria-hidden="true">↗</span>
+        </a>`);
+    homeSource=homeSource.replace('.hero-cta {','.hero-cta {\n    display: flex;\n    justify-content: center;\n    flex-wrap: wrap;\n    gap: 12px;');
+    await writeFile(homePage,homeSource);
   }
   let ignore = await readFile(path.join(destination, '.gitignore'), 'utf8');
   if (!ignore.includes('.wrangler/')) { ignore += '\n# Cloudflare local data and secrets\n.wrangler/\n.dev.vars\n.dev.vars.*\n'; await writeFile(path.join(destination, '.gitignore'), ignore); }
