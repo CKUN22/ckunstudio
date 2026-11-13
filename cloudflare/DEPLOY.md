@@ -22,7 +22,7 @@ R2 虽有免费使用额度，但需开通订阅结算且超额收费，因此�
 
 - 既有 Pages 项目：`gerenzhan`，域名 `ckun.cc`、`www.ckun.cc`。
 - 新建 D1：`ckunstudio`，绑定 `STUDIO_DB`。
-- 数据迁移：`0001_studio.sql`、`0002_d1_image_data.sql`。
+- 数据迁移：`0001_studio.sql` 至 `0004_task_claims.sql` 均已应用。
 - Pages 加密 Secret：`STUDIO_AUTH_SECRET`、`STUDIO_SETUP_KEY`。
 - 正式绑定声明：个人站 `wrangler.jsonc`。没有 R2 绑定。
 - 随机密钥备份：个人站 `.env.ckunstudio.production`（已被 Git 忽略，勿提交、公开或随静态资源上传）。
@@ -61,9 +61,9 @@ npx wrangler pages dev dist --port 8790 --d1 STUDIO_DB=00000000-0000-0000-0000-0
 
 原 Node.js 本地版的数据不会自动迁移到云端。生产团队由用户自行首次初始化；本地测试账号不会上传。
 
-## P0 更新：待发布
+## P0 更新：已发布
 
-本次 P0-01 至 P0-08 已完成实现和本地验证，尚未应用到生产数据库或发布到正式域名。发布前必须先将 `0003_p0.sql` 一同集成到个人站并应用迁移，再发布新版 Functions 和前端，避免新接口读取缺失字段。
+本次 P0-01 至 P0-08 已完成实现和本地验证，已应用到生产数据库并发布到正式域名。发布前必须先将 `0003_p0.sql` 一同集成到个人站并应用迁移，再发布新版 Functions 和前端，避免新接口读取缺失字段。
 
 - 升级前备份 D1 数据库；先在本地副本验证。
 - 将 `cloudflare/site/migrations/studio/0003_p0.sql` 放入个人站的 `migrations/studio`。在个人站目录用现有生产绑定执行 `npx wrangler d1 migrations apply STUDIO_DB --remote`，检查迁移输出后再部署新版站点。
@@ -75,7 +75,7 @@ npx wrangler pages dev dist --port 8790 --d1 STUDIO_DB=00000000-0000-0000-0000-0
 
 P0 真实运行时验证：在独立本地 Pages 服务运行后执行 `node cloudflare/p0-smoke.mjs http://127.0.0.1:8790`。该脚本只接受 localhost，并保留独立测试环境中的历史记录以供检查；不要对生产环境运行。
 
-## 任务认领与标签更新（待发布）
+## 任务认领与标签更新（已发布）
 
 本次新增迁移 `0004_task_claims.sql`：记录增加标签，成员增加固定颜色。部署前需将该文件一同复制到个人站 `migrations/studio`，按上文备份和检查流程应用全部待执行迁移，再发布 Functions 和前端。不要仅复制 `0003_p0.sql`。
 
@@ -86,3 +86,12 @@ P0 真实运行时验证：在独立本地 Pages 服务运行后执行 `node clo
 本次标签扩展无需新 SQL 迁移。必须一起发布 `lib/task-catalog.mjs`、新版 API、前端以及生成的 `public/ckunstudio/task-catalog.js`；`npm run prepare:cloudflare` 会生成并集成这些文件。仅更新页面而遗漏共享模块会导致脚本加载失败。
 
 本地版升级后需重新启动 `node server.mjs` 或 `启动协作软件.cmd`，再刷新浏览器。新版本按进程启动时加载的静态资源提供页面，避免旧 API 与新页面混用。旧标签格式会兼容读取，既有任务不需要重新创建。
+
+
+## 2026 年 11 月 13 日正式更新结果
+
+首页 `/` 的“关于我”旁增加“团队协作”按钮，复用现有 `btn btn-outline` 玻璃胶囊样式，直接跳转 `/ckunstudio/`；`/CK_STUDIO/` 的团队协作入口已删除。应用内“返回首页”回到 `/`。后续运行集成脚本不会重新加入旧入口。
+
+此次将 P0、认领、多标签、主页显示修复统一发布。D1 已备份并应用既有四份迁移，账号数仍为 2、业务记录数仍为 1；原创建账号成为唯一队长，另一个账号为普通成员。旧永久邀请码停用，后续邀请由队长在团队管理中生成。本地账号与演示任务没有上传。
+
+最终代码部署版本：`8bf80c5`，部署地址 `https://d3cf0626.gerenzhan-18z.pages.dev`。正式入口 `https://ckun.cc/ckunstudio/`。JS、CSS 和标签模块使用内容哈希版本参数，避免浏览器加载旧缓存。首页、工作室页、应用与静态资源、初始化状态、未登录接口权限和原隐私页的 HTTP 检查通过。没有变更认证密钥或开通付费服务。

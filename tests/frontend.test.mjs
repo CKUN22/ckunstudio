@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
+import {createHash} from 'node:crypto';
 import {TASK_TAG_GROUPS,COMMON_TASK_TAGS,MAX_TASK_TAGS,TASK_TAGS,normalizeItem,normalizeTags} from '../cloudflare/site/lib/task-catalog.mjs';
 
 function browserHarness(){
@@ -39,4 +40,13 @@ test('素材标签：共享分类与浏览器产物一致，旧标签兼容且�
  for(const tag of ['程序','2D贴图','动画','音乐','音效','瓦片','背景图','视差背景','角色精灵','场景物件','图标','UI界面','字体','粒子特效','材质','环境音'])assert.ok(TASK_TAGS.includes(tag),tag);
  assert.deepEqual(normalizeTags('["动画","动画"]'),['动画']);assert.deepEqual(normalizeTags(null),[]);assert.deepEqual(normalizeTags('invalid'),[]);
  const ui=browserHarness();const markup=ui.run("tagChoices({tags:['视差背景','2D贴图']})");assert.match(markup,/更多素材标签/);assert.match(markup,/value="瓦片"/);assert.match(markup,/value="背景图"/);assert.match(markup,/value="2D贴图" checked/);assert.match(markup,/class="tag-more" open/);
+});
+
+
+test('发布资源回归：页面与模块使用当前内容哈希，避免旧脚本缓存',()=>{
+ const hash=file=>createHash('sha256').update(readFileSync(file)).digest('hex').slice(0,12);
+ const html=readFileSync('cloudflare/site/public/ckunstudio/index.html','utf8'),js=readFileSync('cloudflare/site/public/ckunstudio/app.js','utf8');
+ assert.ok(html.includes('/ckunstudio/app.js?v='+hash('cloudflare/site/public/ckunstudio/app.js')));
+ assert.ok(html.includes('/ckunstudio/style.css?v='+hash('public/style.css')));
+ assert.ok(js.includes('./task-catalog.js?v='+hash('cloudflare/site/lib/task-catalog.mjs')));
 });
