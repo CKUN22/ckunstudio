@@ -85,3 +85,24 @@ test('任务与 BUG 显示认领和本人取消入口，其他成员及草稿没
  assert.equal(ui.run("ownerClass({assignee:'member',assigneeColor:1})"),'owner-color-1');assert.equal(ui.run("ownerClass({assignee:'',assigneeColor:null})"),'');
  const bug=ui.run("kind='bug';editing={id:'sample'};editorMeta({id:'sample',kind:'bug',assignee:'member',status:'doing',tags:[],priority:'normal',due:''})");assert.match(bug,/取消认领/);assert.match(bug,/type="hidden" name="assignee"/);assert.doesNotMatch(bug,/<select name="assignee"/);
 });
+
+test('慢网络切页：团队立即展示、请求并行且合并，离开后不被旧响应拉回',async()=>{
+ const ui=browserHarness();ui.run(`user={id:'captain',role:'captain'};users=[];items=[];globalThis.calls=[];globalThis.pending={};api=url=>{calls.push(url);return new Promise(resolve=>pending[url]=resolve);};`);
+ const opening=ui.run('await showTeam()');await Promise.resolve();
+ assert.match(ui.nodes.get('#content').innerHTML,/<h1>团队管理<\/h1>/);
+ assert.deepEqual(Array.from(ui.run('calls')),['/api/users','/api/invites']);
+ const repeated=ui.run('await showTeam()');await Promise.resolve();assert.equal(ui.run('calls.length'),2);
+ ui.run("renderWork();pending['/api/users']([{id:'captain',name:'队长'}]);pending['/api/invites']([])");await Promise.all([opening,repeated]);
+ assert.equal(ui.run('page'),'work');assert.match(ui.nodes.get('#content').innerHTML,/我的工作台/);
+ await ui.run('await showTeam()');assert.equal(ui.run('calls.length'),2);assert.match(ui.nodes.get('#content').innerHTML,/队长/);
+ const forced=ui.run('await showTeam(true)');await Promise.resolve();assert.equal(ui.run('calls.length'),4);ui.run("pending['/api/users']([]);pending['/api/invites']([])");await forced;
+});
+
+test('慢网络通知：立即展示、合并请求、缓存复用，后台响应不打断导航',async()=>{
+ const ui=browserHarness();ui.run(`user={id:'member',role:'member'};globalThis.calls=0;globalThis.resolveNotice=null;api=()=>{calls++;return new Promise(resolve=>resolveNotice=resolve);};`);
+ const opening=ui.run('await showNotifications()');assert.match(ui.nodes.get('#content').innerHTML,/<h1>通知中心<\/h1>/);
+ const repeated=ui.run('await showNotifications()');assert.equal(ui.run('calls'),1);
+ ui.run("renderWork();resolveNotice([{id:'n1',title:'新通知',item_id:'x',created:'2026-11-13',read_at:''}])");await Promise.all([opening,repeated]);assert.equal(ui.run('page'),'work');
+ await ui.run('await showNotifications()');assert.equal(ui.run('calls'),1);assert.match(ui.nodes.get('#content').innerHTML,/新通知/);
+ const forced=ui.run('await loadNotifications(true)');assert.equal(ui.run('calls'),2);ui.run('resolveNotice([])');await forced;assert.equal(ui.run('notifications.length'),0);
+});
