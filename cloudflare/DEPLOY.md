@@ -1,52 +1,60 @@
-# CKUN Studio · Cloudflare 网页部署
+# CKUN Studio · 免费测试版部署
 
-目标地址：**https://ckun.cc/ckunstudio**。API 为 `/ckunstudio/api/`。应用是现有 Astro 网站的一部分，`/CK_STUDIO` 增加“团队协作”入口；个人站其他页面继续使用静态生成。
+目标地址：**https://ckun.cc/ckunstudio**。API：`/ckunstudio/api/`。使用现有 Cloudflare Pages 项目 `gerenzhan`，由 `/CK_STUDIO` 页面提供“团队协作”入口。
 
-## 结构
+## 当前方案
 
-- `public/ckunstudio/`：独立网页、样式与脚本，默认微软雅黑。
-- `functions/ckunstudio/api/[[path]].js`：Cloudflare Pages Functions 入口。
-- `lib/studio-api.mjs`：认证及团队协作 API。
-- `migrations/studio/0001_studio.sql`：账号、会话、任务、图片索引及限流数据。
-- `public/_routes.json`：只有 `/ckunstudio/api/*` 调用 Functions；其他页面静态服务。
-- `public/_headers`：仅对协作应用设置安全头、禁止搜索引擎索引。
+采用 Pages Functions + D1，不需要 R2 订阅，也不需要独立服务器或持续开机的电脑。账号、任务、BUG、思路及小图附件均保存于 D1。字体默认微软雅黑。
 
-## 在现有 Cloudflare Pages 项目中配置
+- 每条最多 5 张图片，每张最多 512KB。
+- 大图在浏览器内自动缩放并转为 WebP，再上传；小图保留原文件。
+- 图片仍需登录读取，不放在公开静态资源目录。
+- 标题、详情、执行人、状态、优先级、截止日期、搜索及统计功能不变。
+- 每 6 秒同步列表；版本号和原子条件更新防止并发覆盖。
 
-本次接入已经为实际 `gerenzhan` 项目创建了 D1 并设置生产 Secret，个人站已包含真实的 `wrangler.jsonc`。请先检查现有配置，勿重复创建数据库或更换认证 Secret。首次初始化密钥在该站点 Git 忽略的 `.env.ckunstudio.production` 中。R2 开通与生产发布状态见验证记录。
+R2 虽有免费使用额度，但需开通订阅结算且超额收费，因此此版没有启用 R2。D1 免费计划的当前额度是每天 500 万行读取、10 万行写入、账户共 5GB 存储，单个免费数据库最大 500MB。免费额度用尽时请求受限，不会自动升级付费。Pages Functions 也受账号免费请求和运行额度约束。实际以账号套餐及 Cloudflare 最新规则为准。
 
-沿用当前绑定 `ckun.cc` 的项目，不创建替代网站，不更换域名。不需要独立服务器或 Windows 持续开机。
+官方来源：[D1 定价](https://developers.cloudflare.com/d1/platform/pricing/)、[D1 限制](https://developers.cloudflare.com/d1/platform/limits/)、[R2 开通要求](https://developers.cloudflare.com/r2/get-started/)。
 
-1. 在 Cloudflare 创建 D1 数据库，例如 `ckunstudio`，执行 `migrations/studio/0001_studio.sql`。可以在 D1 控制台执行 SQL，或使用 Wrangler：`npx wrangler d1 execute ckunstudio --remote --file migrations/studio/0001_studio.sql`。
-2. 创建 R2 桶，例如 `ckunstudio-images`，保持私有，**不要开启公开访问**。附件由登录接口读取。R2 需在账号中可用，若账号要求开通服务，请由账号所有者处理。
-3. 在当前 Pages 项目的 Settings → Bindings 添加 D1 绑定 **`STUDIO_DB`** 和 R2 绑定 **`STUDIO_IMAGES`**。Production 与 Preview 独立配置，预览使用独立测试数据库和桶。
-4. 在生产环境添加两个加密 Secret：**`STUDIO_AUTH_SECRET`**（至少 32 个随机字符，建议 64 字符）和 **`STUDIO_SETUP_KEY`**（至少 24 个随机字符，建议 48 字符）。两个值应不同，均不提交到 Git。`STUDIO_AUTH_SECRET` 用作密码 pepper，务必长期保管，改变它会导致已有密码失效。`STUDIO_SETUP_KEY` 只用于首次初始化，不是日常登录密码。
-5. 保持构建命令 `npm run build`、输出目录 `dist`、项目根目录为当前 Astro 项目目录。Pages Git 集成会从根目录 `functions/` 构建 Functions；若使用直接上传，使用 `wrangler pages deploy dist --project-name <实际已有项目名>`，不要仅上传 `dist` 的 ZIP，因为 ZIP 静态上传不会构建 Functions。
-6. 将本次提交发布到现有生产分支，或按当前网站原有发布方式部署。在绑定或 Secret 变动后重新部署，确保生效。
-7. 打开 `/ckunstudio`，用初始化密钥创建第一个账号。然后点击“团队成员与邀请”，向另外两位成员提供应用地址和邀请码。其余成员各自注册，不共享登录密码。
+## 已配置资源
 
-未配置绑定或 Secret 时，API 会返回 503 及说明，不会使用浏览器本地存储假装多人同步。首次初始化由密钥保护，防止公开 URL 被其他人抢先注册。数据库中初始化标记、首个账号及邀请码通过 D1 批处理原子提交。
+- 既有 Pages 项目：`gerenzhan`，域名 `ckun.cc`、`www.ckun.cc`。
+- 新建 D1：`ckunstudio`，绑定 `STUDIO_DB`。
+- 数据迁移：`0001_studio.sql`、`0002_d1_image_data.sql`。
+- Pages 加密 Secret：`STUDIO_AUTH_SECRET`、`STUDIO_SETUP_KEY`。
+- 正式绑定声明：个人站 `wrangler.jsonc`。没有 R2 绑定。
+- 随机密钥备份：个人站 `.env.ckunstudio.production`（已被 Git 忽略，勿提交、公开或随静态资源上传）。
 
-## 本地 Cloudflare 运行时验证
+请保管 `STUDIO_AUTH_SECRET`，更换会使已有密码无法验证。初始化密钥只用于第一次创建团队，不能当作普通登录密码。
 
-`wrangler.studio.local.jsonc` **仅用于本地模拟**，里面全是公开测试值，不可用于线上部署。安装 Wrangler 后：
+## 发布与首次使用
+
+在个人站目录运行 `npm run build`，通过既有 Git 集成发布，或使用：
+
+```powershell
+npx wrangler pages deploy dist --project-name gerenzhan --branch master
+```
+
+不要仅上传静态 ZIP：Pages Functions 需要由 Wrangler 或 Git 构建处理。发布后访问 `/ckunstudio`，使用 `.env.ckunstudio.production` 中 `STUDIO_SETUP_KEY` 的值创建第一个账号。随后点击“团队成员与邀请”，邀请另外两位成员各自注册。
+
+公开页面首次创建账号受初始化密钥保护，不会被访客抢先创建团队。其他成员需邀请码加入；所有成员共享一个空间，并可编辑、删除团队记录。
+
+## 本地验证
+
+仅使用本地模拟资源，不触碰线上数据：
 
 ```powershell
 npm run build
 npx wrangler d1 migrations apply STUDIO_DB --local --config wrangler.studio.local.jsonc
-npx wrangler pages dev dist --port 8790 --d1 STUDIO_DB=00000000-0000-0000-0000-000000000001 --r2 STUDIO_IMAGES --binding STUDIO_AUTH_SECRET=local-development-only-not-a-production-secret-2026 --binding STUDIO_SETUP_KEY=local-setup-key-do-not-use-in-production --compatibility-date 2026-11-13
+npx wrangler pages dev dist --port 8790 --d1 STUDIO_DB=00000000-0000-0000-0000-000000000001 --binding STUDIO_AUTH_SECRET=local-development-only-not-a-production-secret-2026 --binding STUDIO_SETUP_KEY=local-setup-key-do-not-use-in-production --compatibility-date 2026-11-13
 ```
 
-打开 `http://localhost:8790/ckunstudio`。本地首次初始化密钥见本地配置中的 `STUDIO_SETUP_KEY`。当前 Pages 不支持 `--config` 自定义路径，因此本地运行通过上述参数绑定，迁移则使用配置文件。不要对该配置添加 `--remote`，不要将其用作生产配置。`.wrangler/` 为本地模拟数据，已忽略。
+本地入口：`http://localhost:8790/ckunstudio`。当前 Pages 不接受自定义配置路径，因此本地开发通过参数指定绑定；迁移使用本地配置。示例密钥只用于本地测试，不可写入生产环境。`.wrangler/` 为模拟数据，Git 已忽略。
 
-## 数据及使用范围
+协作软件目录中的 `node cloudflare/smoke.mjs http://127.0.0.1:8790` 可验证完整流程；脚本禁止对公网地址运行，避免污染线上数据。
 
-所有成员共享一个团队空间，均可编辑和删除记录。每 6 秒同步列表；编辑时通过数据库条件更新及版本号避免互相覆盖。每条最多 5 张 PNG/JPEG/WebP 图片，总计 8MB；R2 保存图片本体，D1 保存元数据。删除记录会删除关联元数据，并异步清理 R2 对象；若对象清理失败可能遗留不可通过应用访问的孤立对象，需要运维清理。
+## 范围及后续
 
-现有 Node.js 本地版本的数据不会自动迁移到云端。部署后首次创建新的团队账号。会话 Cookie 限于 `/ckunstudio` 路径、HttpOnly、SameSite=Strict，HTTPS 下启用 Secure。密码使用带 Secret pepper 的 PBKDF2-SHA256，不保存明文。
+本版用于 3 人小团队的免费测试，图片压缩会影响原图细节，不能用作源素材仓库。大文件和原始美术资源仍通过现有版本管理工具保存。尚未提供多团队隔离、管理员管理、密码找回、评论和编辑历史。
 
-上线后应启用 Cloudflare 账号的备份与访问保护，记录 D1 与 R2 资源对应关系。此版本未提供密码找回、管理员成员管理、历史版本或附件回收站。
-
-## 验证状态
-
-代码与本地模拟验证结果见协作软件项目的 `cloudflare/验证记录.md`。只有 Cloudflare 发布完成并访问生产接口后，才能确认线上可用；本地构建通过不代表已上线。
+原 Node.js 本地版的数据不会自动迁移到云端。生产团队由用户自行首次初始化；本地测试账号不会上传。

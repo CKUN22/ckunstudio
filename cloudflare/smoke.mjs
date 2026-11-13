@@ -25,7 +25,7 @@ let second=await request('/register',{method:'POST',data:{name:'第二位本地�
 if(second.status===409)second=await request('/login',{method:'POST',data:{name:'第二位本地自测',password}});
 assert.equal(second.status,200);const cookie2=second.cookie;
 const image='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=';
-const payload={kind:'task',title:'Cloudflare 自测任务',body:'测试 D1 记录及 R2 附件',status:'todo',assignee:second.data.user.id,priority:'high',due:'2026-12-01',newImages:[image]};
+const payload={kind:'task',title:'Cloudflare 自测任务',body:'测试 D1 记录及小图附件',status:'todo',assignee:second.data.user.id,priority:'high',due:'2026-12-01',newImages:[image]};
 assert.equal((await request('/items',{cookie,method:'POST',origin:'https://evil.example',data:payload})).status,403);
 const created=await request('/items',{cookie,method:'POST',data:payload});assert.equal(created.status,201,JSON.stringify(created.data));const record=created.data;assert.equal(record.images.length,1);
 const url=base+record.images[0];assert.equal((await fetch(url)).status,401);const img=await fetch(url,{headers:{Cookie:cookie2}});assert.equal(img.status,200);assert.equal(img.headers.get('content-type'),'image/png');assert.ok((await img.arrayBuffer()).byteLength>0);
@@ -37,6 +37,8 @@ const temporary=[record.id];
 for(const kind of ['bug','idea']){const result=await request('/items',{cookie,method:'POST',data:{...payload,kind,newImages:[]}});assert.equal(result.status,201);temporary.push(result.data.id);}
 const list=await request('/items',{cookie:cookie2});for(const id of temporary)assert.ok(list.data.some(x=>x.id===id));assert.equal(list.data.find(x=>x.id===record.id).imageCount,1);
 assert.equal((await request('/items',{cookie,method:'POST',data:{...payload,newImages:['data:image/svg+xml;base64,PHN2Zz4=']}})).status,400);
+const oversized=Buffer.alloc(512*1024+1);Buffer.from([137,80,78,71,13,10,26,10]).copy(oversized);
+assert.equal((await request('/items',{cookie,method:'POST',data:{...payload,newImages:['data:image/png;base64,'+oversized.toString('base64')]}})).status,400);
 assert.equal((await request('/items',{cookie,method:'POST',data:{...payload,due:'2026-02-31'}})).status,400);
 const current=await request(`/items/${record.id}`,{cookie});assert.equal((await request(`/items/${record.id}`,{cookie,method:'PUT',data:{...payload,version:current.data.version,keepImages:[],newImages:[]}})).status,200);
 assert.equal((await fetch(url,{headers:{Cookie:cookie2}})).status,404);
@@ -47,4 +49,4 @@ const app=await fetch(base+'/ckunstudio');assert.equal(app.status,200);assert.ma
 assert.equal((await fetch(base+'/ckunstudio/app.js')).status,200);assert.equal((await fetch(base+'/ckunstudio/style.css')).status,200);
 assert.equal((await fetch(base+'/privacy/moshumiyin/')).status,200);
 assert.equal((await request('/logout',{cookie,method:'POST',data:{}})).status,200);assert.equal((await request('/items',{cookie})).status,401);
-console.log('PASS: Cloudflare Pages routing + D1 + private R2 + protected setup race + two accounts + concurrent edit conflict + validation + logout + original site pages');
+console.log('PASS: Cloudflare Pages routing + D1 records and private images + 512KB limit + protected setup race + two accounts + concurrent edit conflict + validation + logout + original site pages');

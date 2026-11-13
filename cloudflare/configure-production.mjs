@@ -11,8 +11,7 @@ const config = {
   name: 'gerenzhan',
   pages_build_output_dir: './dist',
   compatibility_date: '2026-11-13',
-  d1_databases: [{ binding: 'STUDIO_DB', database_name: 'ckunstudio', database_id: '1052e724-880f-4381-b36d-9861d722b9b1', migrations_dir: 'migrations/studio' }],
-  r2_buckets: [{ binding: 'STUDIO_IMAGES', bucket_name: 'ckunstudio-images' }]
+  d1_databases: [{ binding: 'STUDIO_DB', database_name: 'ckunstudio', database_id: '1052e724-880f-4381-b36d-9861d722b9b1', migrations_dir: 'migrations/studio' }]
 };
 const configPath = path.join(target, 'wrangler.jsonc');
 let exists = false; try { await access(configPath); exists = true; } catch {}
@@ -20,6 +19,7 @@ if (exists) {
   const existing = JSON.parse(await readFile(configPath, 'utf8'));
   if (existing.name !== config.name || existing.d1_databases?.[0]?.database_id !== config.d1_databases[0].database_id) throw new Error('Existing production config differs; review before changing');
   if (existing.account_id) { delete existing.account_id; await writeFile(configPath, JSON.stringify(existing, null, 2) + '\n'); }
+  if (existing.r2_buckets) { delete existing.r2_buckets; await writeFile(configPath, JSON.stringify(existing, null, 2) + '\n'); }
 } else await writeFile(configPath, JSON.stringify(config, null, 2) + '\n', { flag: 'wx' });
 
 const secretPath = path.join(target, '.env.ckunstudio.production');

@@ -9,7 +9,6 @@
     "database_id": "00000000-0000-0000-0000-000000000001",
     "migrations_dir": "migrations/studio"
   }],
-  "r2_buckets": [{ "binding": "STUDIO_IMAGES", "bucket_name": "ckunstudio-images-local" }],
   "vars": {
     "STUDIO_AUTH_SECRET": "local-development-only-not-a-production-secret-2026",
     "STUDIO_SETUP_KEY": "local-setup-key-do-not-use-in-production"
