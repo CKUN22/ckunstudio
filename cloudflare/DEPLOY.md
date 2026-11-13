@@ -2,6 +2,8 @@
 
 目标地址：**https://ckun.cc/ckunstudio**。API：`/ckunstudio/api/`。使用现有 Cloudflare Pages 项目 `gerenzhan`，由 `/CK_STUDIO` 页面提供“团队协作”入口。
 
+2026 年 11 月 13 日已发布免费测试版，并验证正式域名页面及接口正常。首次使用请按下文创建团队。
+
 ## 当前方案
 
 采用 Pages Functions + D1，不需要 R2 订阅，也不需要独立服务器或持续开机的电脑。账号、任务、BUG、思路及小图附件均保存于 D1。字体默认微软雅黑。
