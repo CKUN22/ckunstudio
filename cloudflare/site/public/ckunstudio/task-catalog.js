@@ -1,3 +1,10 @@
+export const TASK_CATEGORIES = ['角色','地图','物品','机制'];
+export function inferTaskCategory(title=''){
+ if(/^(?:主角动作|商人动作|木乃伊动作|单只猫动作|角色)-/.test(title))return '角色';
+ if(/^(?:关卡|地图)-|^map\d+$/i.test(title))return '地图';
+ if(/^(?:道具|物品)-/.test(title))return '物品';
+ return '机制';
+}
 // Shared catalog for local API, Cloudflare API and generated browser modules.
 // Taxonomy references: https://itch.io/game-assets and https://kenney.nl/assets
 export const TASK_TAG_GROUPS = [
@@ -15,7 +22,7 @@ export function normalizeTags(value){
   return Array.isArray(value)?[...new Set(value.filter(tag=>typeof tag==='string'&&tag.trim()))]:[];
 }
 export function normalizeItem(item){
-  return {...item,body:typeof item.body==='string'?item.body:'',assignee:item.assignee||'',due:item.due||'',status:item.status||'todo',priority:item.priority||'normal',tags:normalizeTags(item.tags),dependencies:Array.isArray(item.dependencies)?item.dependencies:[]};
+  return {...item,category:item.kind==='task'?(TASK_CATEGORIES.includes(item.category)?item.category:inferTaskCategory(item.title)):'',body:typeof item.body==='string'?item.body:'',assignee:item.assignee||'',due:item.due||'',status:item.status||'todo',priority:item.priority||'normal',tags:normalizeTags(item.tags),dependencies:Array.isArray(item.dependencies)?item.dependencies:[]};
 }
 
 export const BUG_TAG_GROUPS = [

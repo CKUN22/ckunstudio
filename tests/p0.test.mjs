@@ -25,6 +25,12 @@ for(const local of [true,false])test(`P0 全流程：${local?'本地':'Cloudflar
  const expiry=await req('/invites',captain,'POST',{days:1,maxUses:1});sql.prepare('UPDATE studio_invites SET expires=0 WHERE id=?').run(expiry.data.id);assert.match((await req('/register','','POST',{name:'过期',password,invite:expiry.data.code})).data.error,/过期/);
  const revoked=await req('/invites',captain,'POST',{days:1,maxUses:1});assert.equal((await req('/invites/'+revoked.data.id,captain,'DELETE',{})).status,200);assert.match((await req('/register','','POST',{name:'撤销',password,invite:revoked.data.code})).data.error,/撤销/);
  const raced=await req('/invites',captain,'POST',{days:1,maxUses:1});const racedResults=await Promise.all(['竞争一','竞争二'].map(name=>req('/register','','POST',{name,password,invite:raced.data.code})));assert.deepEqual(racedResults.map(x=>x.status).sort(),[200,403]);
+ const categorized=await req('/items',captain,'POST',{kind:'task',title:'道具-纸箱',category:'物品',tags:['程序']});assert.equal(categorized.status,201);assert.equal(categorized.data.category,'物品');
+ const recategorized=await req('/items/'+categorized.data.id,captain,'PUT',{...categorized.data,category:'机制',keepImages:[],newImages:[]});assert.equal(recategorized.status,200);assert.equal(recategorized.data.category,'机制');
+ assert.equal((await req('/items/'+categorized.data.id,captain,'PUT',{...recategorized.data,category:'错误分类',keepImages:[],newImages:[]})).status,400);
+ assert.equal((await req('/items',captain,'POST',{kind:'task',title:'错误分类',category:'其他'})).status,400);
+ assert.equal((await req('/items',captain,'POST',{kind:'task',title:'主角动作-待机'})).data.category,'角色');
+ assert.equal((await req('/items',captain,'POST',{kind:'task',title:'关卡-map50'})).data.category,'地图');
  // Publishing needs only a title and optional tags; claim is an atomic competing operation.
  const published=await req('/items',captain,'POST',{kind:'task',title:'待认领动画',tags:['动画','瓦片','背景图','视差背景','场景物件','2D贴图']});
  assert.equal(published.status,201,JSON.stringify(published.data));assert.equal(published.data.assignee,'');assert.equal(published.data.due,'');assert.equal(published.data.eta,'');assert.deepEqual(published.data.tags,['动画','瓦片','背景图','视差背景','场景物件','2D贴图']);

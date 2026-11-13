@@ -1,4 +1,4 @@
-import { MAX_TASK_TAGS, normalizeTags, tagsFor } from './task-catalog.mjs';
+import { TASK_CATEGORIES, inferTaskCategory, MAX_TASK_TAGS, normalizeTags, tagsFor } from './task-catalog.mjs';
 const BASE = '/ckunstudio/api';
 const COOKIE = 'ckunstudio_session';
 const encoder = new TextEncoder();
@@ -232,7 +232,7 @@ export async function onRequest(context) {
       const now = new Date().toISOString(), mutation = random();
       const removed = existing?.imageMeta.filter(x => !keep.includes(`${BASE}/images/${x.id}`)) || [];
       const extras=await extraFields(db,data,existing,user,itemId);
-      const statements = [existing ? db.prepare('UPDATE studio_items SET kind=?,title=?,body=?,status=?,assignee=?,priority=?,due=?,version=version+1,updated=?,mutation=?,eta=?,progress=?,remaining=?,eta_reason=?,blocked_reason=?,tags=? WHERE id=? AND version=? RETURNING id').bind(...fields, now, mutation,...extras.values, itemId, data.version) : db.prepare('INSERT INTO studio_items(id,kind,title,body,status,assignee,priority,due,version,created,updated,author,mutation,eta,progress,remaining,eta_reason,blocked_reason,tags) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id').bind(itemId, ...fields, 1, now, now, user.id, mutation,...extras.values)];
+      const statements = [existing ? db.prepare('UPDATE studio_items SET kind=?,title=?,body=?,status=?,assignee=?,priority=?,due=?,version=version+1,updated=?,mutation=?,eta=?,progress=?,remaining=?,eta_reason=?,blocked_reason=?,tags=?,category=? WHERE id=? AND version=? RETURNING id').bind(...fields, now, mutation,...extras.values, itemId, data.version) : db.prepare('INSERT INTO studio_items(id,kind,title,body,status,assignee,priority,due,version,created,updated,author,mutation,eta,progress,remaining,eta_reason,blocked_reason,tags,category) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id').bind(itemId, ...fields, 1, now, now, user.id, mutation,...extras.values)];
       for (const image of removed) statements.push(db.prepare('DELETE FROM studio_images WHERE id=? AND EXISTS(SELECT 1 FROM studio_items WHERE id=? AND mutation=?)').bind(image.id, itemId, mutation));
       for (const image of images) {
         statements.push(db.prepare('INSERT INTO studio_images(id,item_id,type,size) SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM studio_items WHERE id=? AND mutation=?)').bind(image.id, itemId, image.type, image.bytes.length, itemId, mutation));
@@ -284,6 +284,9 @@ async function extraFields(db,data,existing,user,itemId){
   const tags=data.tags??existing?.tags??[];
   if(!Array.isArray(tags)||tags.length>MAX_TASK_TAGS||new Set(tags).size!==tags.length||tags.some(tag=>!tagsFor(data.kind).includes(tag)&&!existing?.tags?.includes(tag)))fail(400,`标签无效，最多选择 ${MAX_TASK_TAGS} 项`);
   values.push(JSON.stringify(tags));
+  const category=data.kind==='task'?(data.category??existing?.category??inferTaskCategory(data.title)):'';
+  if(data.kind==='task'&&!TASK_CATEGORIES.includes(category))fail(400,'任务分类无效，请选择角色、地图、物品或机制');
+  values.push(category);
   return {values,dependencies};
 }
 async function notify(db,userId,itemId,title,event){

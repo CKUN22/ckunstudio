@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import {createHash} from 'node:crypto';
-import {TASK_TAG_GROUPS,COMMON_TASK_TAGS,MAX_TASK_TAGS,TASK_TAGS,normalizeItem,normalizeTags,tagGroupsFor} from '../cloudflare/site/lib/task-catalog.mjs';
+import {TASK_CATEGORIES,TASK_TAG_GROUPS,COMMON_TASK_TAGS,MAX_TASK_TAGS,TASK_TAGS,normalizeItem,normalizeTags,tagGroupsFor} from '../cloudflare/site/lib/task-catalog.mjs';
 
 function browserHarness(){
  class Element{
@@ -16,7 +16,7 @@ function browserHarness(){
  const records=[{id:'a'.repeat(32),kind:'task',title:'猫-待机状态-动画',body:'',status:'todo',assignee:'',tags:'[]',version:1,images:[]},{id:'b'.repeat(48),kind:'task',title:'猫-待机-动作',body:'',status:'todo',assignee:'',tags:'["动画"]',version:1,images:[]}];
  const fetch=async(url,options={})=>{let data;if(url==='/api/items'&&options.method==='POST'){const payload=JSON.parse(options.body);data={...payload,id:'new-task',version:1,images:[]};records.push({...data,tags:JSON.stringify(payload.tags)});}else if(url==='/api/items')data=structuredClone(records);else if(url.startsWith('/api/items/')){const item=records.find(x=>x.id===url.split('/').pop());if(!item)throw new Error('Fixture not found');if(options.method==='PUT')Object.assign(item,JSON.parse(options.body),{version:item.version+1});data=structuredClone(item);}else throw new Error('Unexpected request '+url);return {ok:true,status:200,json:async()=>data};};
  class FormData{constructor(form){this.fields=form.fields;}*[Symbol.iterator](){yield*Object.entries(this.fields);}}
- const context=vm.createContext({document,window:{addEventListener(){}},console,fetch,FormData,Date,JSON,URLSearchParams,setTimeout:()=>1,clearTimeout(){},TASK_TAG_GROUPS,COMMON_TASK_TAGS,MAX_TASK_TAGS,normalizeItem,tagGroupsFor});
+ const context=vm.createContext({document,window:{addEventListener(){}},console,fetch,FormData,Date,JSON,URLSearchParams,setTimeout:()=>1,clearTimeout(){},TASK_CATEGORIES,TASK_TAG_GROUPS,COMMON_TASK_TAGS,MAX_TASK_TAGS,normalizeItem,tagGroupsFor});
  const source=readFileSync('public/app.js','utf8').replace(/^import[^\n]+\n/,'').replace('\nboot();','\n');vm.runInContext(source,context);
  return {nodes,nav,pages,records,context,run:code=>vm.runInContext(code.includes('await ')?`(async()=>{${code}})()`:code,context),document};
 }
@@ -105,4 +105,21 @@ test('慢网络通知：立即展示、合并请求、缓存复用，后台响�
  ui.run("renderWork();resolveNotice([{id:'n1',title:'新通知',item_id:'x',created:'2026-11-13',read_at:''}])");await Promise.all([opening,repeated]);assert.equal(ui.run('page'),'work');
  await ui.run('await showNotifications()');assert.equal(ui.run('calls'),1);assert.match(ui.nodes.get('#content').innerHTML,/新通知/);
  const forced=ui.run('await loadNotifications(true)');assert.equal(ui.run('calls'),2);ui.run('resolveNotice([])');await forced;assert.equal(ui.run('notifications.length'),0);
+});
+
+for(const moduleKind of ['task','bug','idea'])test(`分页：${moduleKind} 每页20条，筛选回首页，同步和详情返回保留页码`,async()=>{
+ const ui=browserHarness();ui.records.splice(0);for(let i=0;i<45;i++)ui.records.push({id:String(i).padStart(32,'0'),kind:moduleKind,title:'条目-'+i,body:'正文',category:i<25?'地图':'角色',tags:[],status:'todo',assignee:'',version:1,images:[]});
+ await ui.run(`user={id:'member',role:'member'};users=[];items=await api('/api/items');kind='${moduleKind}';renderList();`);
+ const count=()=> (ui.nodes.get('#rows').innerHTML.match(/data-id=/g)||[]).length;
+ assert.equal(count(),20);ui.run('listPage=2;updateList()');assert.equal(count(),20);assert.match(ui.nodes.get('#rows').innerHTML,/打开 条目-20/);assert.doesNotMatch(ui.nodes.get('#rows').innerHTML,/打开 条目-0"/);
+ ui.run('updateList()');assert.equal(ui.run('listPage'),2);await ui.run("await openEditor('00000000000000000000000000000020');returnFromEditor();");assert.equal(ui.run('listPage'),2);
+ ui.run('listPage=3;updateList()');assert.equal(count(),5);assert.match(ui.nodes.get('#pagination').innerHTML,/data-list-page="4" disabled/);
+ ui.nodes.get('#search').oninput({target:{value:'条目-44'}});assert.equal(ui.run('listPage'),1);assert.equal(count(),1);
+ ui.nodes.get('#search').oninput({target:{value:'不存在'}});assert.equal(count(),0);assert.match(ui.nodes.get('#pagination').innerHTML,/1 \/ 1/);
+ ui.nodes.get('#search').oninput({target:{value:''}});ui.run('listPage=3;items=items.slice(0,20);updateList()');assert.equal(ui.run('listPage'),1);assert.equal(count(),20);
+});
+test('任务分类：筛选独立于素材标签，编辑可更改且保留分类',async()=>{
+ const ui=browserHarness();await ui.run("user={id:'member',role:'member'};users=[];items=[normalizeItem({id:'role',kind:'task',title:'主角动作-待机',tags:['动画'],status:'todo',images:[]}),normalizeItem({id:'map',kind:'task',title:'关卡-map1',tags:['瓦片'],status:'todo',images:[]})];kind='task';categoryFilter='地图';renderList();");
+ assert.match(ui.nodes.get('#rows').innerHTML,/关卡-map1/);assert.doesNotMatch(ui.nodes.get('#rows').innerHTML,/主角动作/);assert.match(ui.nodes.get('#content').innerHTML,/任务分类筛选/);
+ await ui.run('await openEditor()');assert.match(ui.nodes.get('#content').innerHTML,/name="category"/);assert.match(ui.nodes.get('#content').innerHTML,/value="地图" selected/);
 });
