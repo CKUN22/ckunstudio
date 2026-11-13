@@ -13,6 +13,8 @@
 
 ## 在现有 Cloudflare Pages 项目中配置
 
+本次接入已经为实际 `gerenzhan` 项目创建了 D1 并设置生产 Secret，个人站已包含真实的 `wrangler.jsonc`。请先检查现有配置，勿重复创建数据库或更换认证 Secret。首次初始化密钥在该站点 Git 忽略的 `.env.ckunstudio.production` 中。R2 开通与生产发布状态见验证记录。
+
 沿用当前绑定 `ckun.cc` 的项目，不创建替代网站，不更换域名。不需要独立服务器或 Windows 持续开机。
 
 1. 在 Cloudflare 创建 D1 数据库，例如 `ckunstudio`，执行 `migrations/studio/0001_studio.sql`。可以在 D1 控制台执行 SQL，或使用 Wrangler：`npx wrangler d1 execute ckunstudio --remote --file migrations/studio/0001_studio.sql`。
