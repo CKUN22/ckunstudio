@@ -1,0 +1,66 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {DatabaseSync} from 'node:sqlite';
+import {readFileSync,readdirSync} from 'node:fs';
+import {onRequest} from '../cloudflare/site/lib/studio-api.mjs';
+
+for(const local of [true,false])test(`P0 全流程：${local?'本地':'Cloudflare'} 权限、邀请、依赖、进度、通知、移除`,async()=>{
+ const sql=new DatabaseSync(':memory:');sql.exec('PRAGMA foreign_keys=ON');
+ for(const file of readdirSync('cloudflare/site/migrations/studio').sort())sql.exec(readFileSync('cloudflare/site/migrations/studio/'+file,'utf8'));
+ function prepare(query){let args=[];return {bind(...values){args=values;return this;},async first(){return sql.prepare(query).get(...args)||null;},async all(){return {results:sql.prepare(query).all(...args)};},async run(){const result=sql.prepare(query).run(...args);return {meta:{changes:result.changes}};},execute(){return {results:sql.prepare(query).all(...args)};}};}
+ const db={prepare,async batch(statements){sql.exec('BEGIN IMMEDIATE');try{const results=statements.map(s=>s.execute());sql.exec('COMMIT');return results;}catch(e){sql.exec('ROLLBACK');throw e;}}};
+ const env={STUDIO_DB:db,STUDIO_AUTH_SECRET:'local-development-secret-not-used-for-scrypt',STUDIO_SETUP_KEY:'local-setup-key-do-not-use-in-production',LOCAL_MODE:local};
+ const prefix=local?'/api':'/ckunstudio/api';
+ async function req(route,cookie='',method='GET',data){const response=await onRequest({env,request:new Request('http://localhost'+prefix+route,{method,headers:{'Content-Type':'application/json',Cookie:cookie},...(data?{body:JSON.stringify(data)}:{})})});return {status:response.status,data:response.headers.get('content-type')?.includes('json')?await response.json():await response.arrayBuffer(),cookie:response.headers.get('set-cookie')?.split(';')[0],headers:response.headers};}
+ const password='strong-password-for-tests';
+ const first=await req('/setup','','POST',{name:'队长',password,setupKey:env.STUDIO_SETUP_KEY});assert.equal(first.status,201,JSON.stringify(first.data));assert.equal(first.data.user.role,'captain');assert.match(first.headers.get('set-cookie'),local?/Path=\/;/:/Path=\/ckunstudio;/);
+ const captain=first.cookie;
+ const invitation=await req('/invites',captain,'POST',{days:1,maxUses:2});assert.equal(invitation.status,201);const code=invitation.data.code;
+ const register=name=>req('/register','','POST',{name,password,invite:code});
+ const second=await register('成员乙'),third=await register('成员丙');assert.equal(second.status,200);assert.equal(third.status,200);assert.equal(second.data.user.role,'member');assert.equal((await register('用尽')).status,403);assert.equal((await register('成员乙')).status,403);
+ const member=second.cookie,observer=third.cookie;assert.equal((await req('/register','','POST',{name:'成员乙',password,invite:first.data.invite})).status,409);
+ assert.equal((await req('/me',member)).data.invite,undefined);assert.equal((await req('/invites',member)).status,403);assert.equal((await req('/invites',member,'POST',{days:1,maxUses:3})).status,403);assert.equal((await req('/invites/'+invitation.data.id,member,'DELETE',{})).status,403);
+ assert.equal((await req('/users/'+first.data.user.id,member,'DELETE',{})).status,403);assert.equal((await req('/users/'+first.data.user.id,captain,'DELETE',{})).status,400);assert.equal((await req('/users/'+second.data.user.id,member,'PUT',{role:'captain'})).status,404);
+ const listing=await req('/users',member);assert.equal(listing.data.length,3);assert.ok(listing.data.every(x=>x.created&&!x.password&&!x.salt));
+ const expiry=await req('/invites',captain,'POST',{days:1,maxUses:1});sql.prepare('UPDATE studio_invites SET expires=0 WHERE id=?').run(expiry.data.id);assert.match((await req('/register','','POST',{name:'过期',password,invite:expiry.data.code})).data.error,/过期/);
+ const revoked=await req('/invites',captain,'POST',{days:1,maxUses:1});assert.equal((await req('/invites/'+revoked.data.id,captain,'DELETE',{})).status,200);assert.match((await req('/register','','POST',{name:'撤销',password,invite:revoked.data.code})).data.error,/撤销/);
+ const raced=await req('/invites',captain,'POST',{days:1,maxUses:1});const racedResults=await Promise.all(['竞争一','竞争二'].map(name=>req('/register','','POST',{name,password,invite:raced.data.code})));assert.deepEqual(racedResults.map(x=>x.status).sort(),[200,403]);
+ const image='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=';
+ const base={kind:'task',title:'前置关卡',body:'测试',status:'todo',priority:'high',assignee:second.data.user.id,due:'',newImages:[image],eta:'2026-01-01T12:30:00+08:00',progress:'地形完成',remaining:'敌人点位',eta_reason:'估算',dependencies:[]};
+ const a=await req('/items',member,'POST',base);assert.equal(a.status,201,JSON.stringify(a.data));assert.equal(a.data.eta,'2026-01-01T04:30:00.000Z');assert.equal(a.data.author,second.data.user.id);
+ const b=await req('/items',captain,'POST',{...base,title:'下游敌人',assignee:third.data.user.id,status:'blocked',blocked_reason:'等待关卡',dependencies:[a.data.id],newImages:[]});assert.equal(b.status,201,JSON.stringify(b.data));assert.equal(b.data.status,'blocked');
+ async function edit(item,changes={},who=captain){return req('/items/'+item.id,who,'PUT',{...base,...item,keepImages:item.images,newImages:[],...changes});}
+ assert.equal((await edit(a.data,{progress:'越权'},observer)).status,403);
+ assert.equal((await edit(a.data,{dependencies:[a.data.id]})).status,400);
+ assert.equal((await edit(a.data,{dependencies:[b.data.id]})).status,400);
+ assert.equal((await edit(a.data,{dependencies:['f'.repeat(48)]})).status,400);
+ assert.equal((await edit(b.data,{status:'done'})).status,400);
+ assert.equal((await edit(a.data,{status:'blocked',blocked_reason:''})).status,400);
+ assert.equal((await edit(a.data,{eta:'2026-01-01T12:00'})).status,400);assert.equal((await edit(a.data,{eta:'2026-02-31T12:00:00Z'})).status,400);
+ assert.equal((await req('/items/'+a.data.id+'/follow',observer,'POST',{})).status,200);
+ const complete=await edit(a.data,{status:'done',progress:'已完成',remaining:''},member);assert.equal(complete.status,200,JSON.stringify(complete.data));
+ assert.equal((await edit(a.data,{status:'doing'},member)).status,409);
+ assert.equal((await req('/items/'+b.data.id,observer)).data.status,'blocked');
+ const soon=await req('/items',captain,'POST',{...base,title:'即将完成',assignee:third.data.user.id,eta:new Date(Date.now()+3600000).toISOString(),newImages:[]});assert.equal(soon.status,201);
+ let notes=await req('/notifications',observer);assert.ok(notes.data.some(x=>x.title.includes('前置任务已完成')));assert.ok(notes.data.some(x=>x.title.includes('记录已更新')));assert.ok(notes.data.some(x=>x.title.includes('即将到期')));
+ const count=notes.data.length;assert.equal((await req('/notifications',observer)).data.length,count);
+ const note=notes.data[0];assert.equal((await req('/notifications/read',observer,'POST',{id:note.id})).status,200);assert.ok((await req('/notifications',observer)).data.find(x=>x.id===note.id).read_at);
+ const otherBefore=(await req('/notifications',member)).data;assert.equal((await req('/notifications/read',observer,'POST',{id:otherBefore[0].id})).status,200);assert.equal((await req('/notifications',member)).data.find(x=>x.id===otherBefore[0].id).read_at,'');
+ await req('/notifications/read',observer,'POST',{id:'all'});assert.ok((await req('/notifications',observer)).data.every(x=>x.read_at));
+ const reopened=await edit(complete.data,{status:'doing'});assert.equal(reopened.status,200);assert.ok((await req('/notifications',observer)).data.some(x=>x.title.includes('重新打开')));
+ assert.equal((await req('/items/'+a.data.id,captain,'DELETE',{version:reopened.data.version})).status,409);
+ assert.equal((await req('/items/'+a.data.id+'/follow',observer,'DELETE',{})).status,200);
+ const pending=await req('/items',member,'POST',{...base,title:'成员历史作品',eta:'',newImages:[]});assert.equal(pending.status,201);
+ const imgPath=new URL('http://localhost'+a.data.images[0]).pathname.replace(prefix,'');assert.equal((await req(imgPath,member)).status,200);
+ assert.equal((await req('/users/'+second.data.user.id,captain,'DELETE',{})).status,200);
+ for(const route of ['/items','/users','/me','/items/'+a.data.id,imgPath,'/notifications'])assert.equal((await req(route,member)).status,401,route);
+ assert.equal((await req('/items',member,'POST',base)).status,401);assert.equal((await req('/login','','POST',{name:'成员乙',password})).status,403);
+ const historic=await req('/items/'+pending.data.id,captain);assert.equal(historic.data.author,second.data.user.id);assert.equal(historic.data.assignee,'');assert.equal((await req('/users',observer)).data.some(x=>x.id===second.data.user.id),false);
+ const oldNotes=sql.prepare('SELECT count(*) n FROM studio_notifications WHERE user_id=?').get(second.data.user.id).n;
+ await edit(reopened.data,{status:'done'});assert.equal(sql.prepare('SELECT count(*) n FROM studio_notifications WHERE user_id=?').get(second.data.user.id).n,oldNotes);
+ const current=await req('/items/'+a.data.id,captain);assert.equal((await req('/items/'+a.data.id,captain,'DELETE',{version:current.data.version,confirmDependencies:true})).status,200);assert.deepEqual((await req('/items/'+b.data.id,captain)).data.dependencies,[]);assert.ok((await req('/notifications',observer)).data.some(x=>x.title.includes('前置任务已删除')));
+ assert.ok(sql.prepare("SELECT count(*) n FROM studio_activity WHERE event IN ('invite','join','remove','revoke-invite')").get().n>=7);
+ // Exactly one captain after upgrade, and no member can assign themselves that role.
+ assert.equal(sql.prepare("SELECT count(*) n FROM studio_users WHERE role='captain'").get().n,1);
+ sql.close();
+});

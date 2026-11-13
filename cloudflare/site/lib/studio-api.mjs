@@ -38,25 +38,25 @@ async function readBody(request) {
   const bytes = new Uint8Array(length); let offset = 0; for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
   try { const data = JSON.parse(new TextDecoder().decode(bytes) || '{}'); if (!data || Array.isArray(data) || typeof data !== 'object') fail(400, '请求格式错误'); return data; } catch { fail(400, '请求格式错误'); }
 }
-function sessionToken(request) { return new RegExp(`(?:^|;\\s*)${COOKIE}=([a-f0-9]{48})`).exec(request.headers.get('Cookie') || '')?.[1]; }
-function cookie(request, token = '') { return `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/ckunstudio; Max-Age=${token ? 604800 : 0}${new URL(request.url).protocol === 'https:' ? '; Secure' : ''}`; }
-const selectItem = 'SELECT id,kind,title,body,status,assignee,priority,due,version,created,updated,author FROM studio_items';
+function sessionToken(request) { return new RegExp(`(?:^|;\s*)${new URL(request.url).pathname.startsWith('/api/') ? 'session' : COOKIE}=([a-f0-9]{32,48})`).exec(request.headers.get('Cookie') || '')?.[1]; }
+function cookie(request, token = '') { return `${new URL(request.url).pathname.startsWith('/api/') ? 'session' : COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=${new URL(request.url).pathname.startsWith('/api/')?'/':'/ckunstudio'}; Max-Age=${token ? 604800 : 0}${new URL(request.url).protocol === 'https:' ? '; Secure' : ''}`; }
+const selectItem = 'SELECT i.*,(SELECT name FROM studio_users WHERE id=i.author) AS authorName,(SELECT name FROM studio_users WHERE id=i.assignee) AS assigneeName FROM studio_items i';
 async function getItem(db, id) {
-  const item = await db.prepare(`${selectItem} WHERE id=?`).bind(id).first();
+  const item = await db.prepare(`${selectItem} WHERE i.id=?`).bind(id).first();
   if (!item) fail(404, '记录不存在');
   const images = (await db.prepare('SELECT id,type,size FROM studio_images WHERE item_id=? ORDER BY id').bind(id).all()).results;
-  return { ...item, images: images.map(x => `${BASE}/images/${x.id}`), imageMeta: images };
+  return { ...item, status:item.blocked_reason ? 'blocked' : item.status, dependencies:(await db.prepare('SELECT predecessor FROM studio_dependencies WHERE item_id=?').bind(id).all()).results.map(x=>x.predecessor), images: images.map(x => `${BASE}/images/${x.id}`), imageMeta: images };
 }
 function publicItem(item) { const { imageMeta, ...rest } = item; return rest; }
-async function fieldsFor(db, data) {
-  if (!['task', 'bug', 'idea'].includes(data.kind) || !['todo', 'doing', 'done'].includes(data.status) || !['low', 'normal', 'high', 'urgent'].includes(data.priority)) fail(400, '类型或状态无效');
+async function fieldsFor(db, data, existing) {
+  if (!['task', 'bug', 'idea'].includes(data.kind) || !['todo', 'doing', 'done', 'blocked'].includes(data.status) || !['low', 'normal', 'high', 'urgent'].includes(data.priority)) fail(400, '类型或状态无效');
   const assignee = text(data.assignee, 80);
-  if (assignee && !await db.prepare('SELECT id FROM studio_users WHERE id=?').bind(assignee).first()) fail(400, '执行人不存在');
+  if (assignee && assignee!==existing?.assignee && !await db.prepare('SELECT id FROM studio_users WHERE id=? AND active=1').bind(assignee).first()) fail(400, '执行人不存在');
   const due = text(data.due, 10);
   if (due && (!/^\d{4}-\d{2}-\d{2}$/.test(due) || !Number.isFinite(Date.parse(due)) || new Date(due).toISOString().slice(0, 10) !== due)) fail(400, '日期无效');
-  return [data.kind, text(data.title, 160, true), text(data.body, 20000), data.status, assignee, data.priority, due];
+  return [data.kind, text(data.title, 160, true), text(data.body, 20000), data.status==='blocked'?'todo':data.status, assignee, data.priority, due];
 }
-function parseImages(sources = []) {
+function parseImages(sources = [], local = false) {
   if (!Array.isArray(sources) || sources.length > 5) fail(400, '最多添加 5 张图片');
   let total = 0;
   return sources.map(src => {
@@ -66,7 +66,7 @@ function parseImages(sources = []) {
     let decoded; try { decoded = atob(match[2]); } catch { fail(400, '图片编码无效'); }
     const bytes = Uint8Array.from(decoded, x => x.charCodeAt(0)); total += bytes.length;
     const valid = match[1] === 'image/png' ? [137,80,78,71,13,10,26,10].every((b,i) => bytes[i] === b) : match[1] === 'image/jpeg' ? bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255 : decoded.slice(0,4) === 'RIFF' && decoded.slice(8,12) === 'WEBP';
-    if (!valid || bytes.length > 512 * 1024 || total > 5 * 512 * 1024) fail(400, '免费测试版每张图片最多 512KB，请压缩后上传');
+    if (!valid || (local ? total > 8 * 1024 * 1024 : bytes.length > 512 * 1024 || total > 5 * 512 * 1024)) fail(400, '免费测试版每张图片最多 512KB，请压缩后上传');
     return { id: random(), type: match[1], bytes, data: match[2] };
   });
 }
@@ -89,8 +89,8 @@ async function loginResponse(db, request, user, extra = {}, status = 200) {
 export async function onRequest(context) {
   const { request, env } = context;
   try {
-    const url = new URL(request.url), route = url.pathname.slice(BASE.length).replace(/\/$/, '') || '/';
-    if (!url.pathname.startsWith(BASE + '/')) fail(404, '接口不存在');
+    const url = new URL(request.url), base=env.LOCAL_MODE?'/api':BASE, route = url.pathname.slice(base.length).replace(/\/$/, '') || '/';
+    if (!url.pathname.startsWith(base + '/')) fail(404, '接口不存在');
     if (!env.STUDIO_DB || !env.STUDIO_AUTH_SECRET || env.STUDIO_AUTH_SECRET.length < 32) fail(503, '协作服务尚未配置完成，请联系站点管理员绑定数据库和认证密钥');
     const db = env.STUDIO_DB.withSession ? env.STUDIO_DB.withSession('first-primary') : env.STUDIO_DB;
     if (['POST', 'PUT', 'DELETE'].includes(request.method)) {
@@ -98,14 +98,14 @@ export async function onRequest(context) {
       if (!request.headers.get('Content-Type')?.startsWith('application/json')) fail(415, '请使用 JSON 请求');
     }
     if (route === '/setup' && request.method === 'GET') {
-      return json(200, { needsSetup: !await db.prepare('SELECT id FROM studio_users LIMIT 1').first(), setupKeyRequired: true });
+      return json(200, { needsSetup: !await db.prepare('SELECT id FROM studio_users LIMIT 1').first(), setupKeyRequired: !env.LOCAL_MODE });
     }
     if (route === '/setup' && request.method === 'POST') {
       await rateLimit(db, request, route);
       if (await db.prepare('SELECT id FROM studio_users LIMIT 1').first()) fail(409, '团队已初始化，请使用邀请码加入');
       const data = await readBody(request);
-      if (!env.STUDIO_SETUP_KEY || env.STUDIO_SETUP_KEY.length < 24) fail(503, '管理员尚未设置团队初始化密钥');
-      if (!secretEqual(data.setupKey, env.STUDIO_SETUP_KEY)) fail(403, '初始化密钥不正确');
+      if (!env.LOCAL_MODE && (!env.STUDIO_SETUP_KEY || env.STUDIO_SETUP_KEY.length < 24)) fail(503, '管理员尚未设置团队初始化密钥');
+      if (!env.LOCAL_MODE && !secretEqual(data.setupKey, env.STUDIO_SETUP_KEY)) fail(403, '初始化密钥不正确');
       const name = text(data.name, 40, true), password = text(data.password, 200, true);
       if (password.length < 10) fail(400, '密码至少需要 10 个字符');
       const uid = random(), salt = random(), invite = random(), mutation = random();
@@ -114,77 +114,182 @@ export async function onRequest(context) {
       try {
         await db.batch([
           db.prepare('INSERT INTO studio_settings(key,value) VALUES(?,?)').bind('initialized', mutation),
-          db.prepare('INSERT INTO studio_users VALUES(?,?,?,?,?)').bind(uid, name, digest, salt, new Date().toISOString()),
-          db.prepare('INSERT INTO studio_settings(key,value) VALUES(?,?)').bind('invite', invite)
+          db.prepare("INSERT INTO studio_users(id,name,password,salt,created,role,active) VALUES(?,?,?,?,?,'captain',1)").bind(uid, name, digest, salt, new Date().toISOString()),
+          db.prepare('INSERT INTO studio_invites(id,code,expires,max_uses,created,author) VALUES(?,?,?,?,?,?)').bind(random(),invite,Date.now()+7*86400000,10,new Date().toISOString(),uid)
         ]);
       } catch (error) { if (await db.prepare('SELECT value FROM studio_settings WHERE key=?').bind('initialized').first()) fail(409, '团队已经初始化'); throw error; }
-      return loginResponse(db, request, { id: uid, name }, { invite }, 201);
+      return loginResponse(db, request, { id: uid, name, role:'captain' }, { invite }, 201);
     }
     if (['/login', '/register'].includes(route) && request.method === 'POST') {
       await rateLimit(db, request, route);
       const data = await readBody(request), name = text(data.name, 40, true), password = text(data.password, 200, true);
       let user;
       if (route === '/register') {
-        const invite = await db.prepare('SELECT value FROM studio_settings WHERE key=?').bind('invite').first();
-        if (!invite || !secretEqual(data.invite, invite.value)) fail(403, '邀请码不正确');
+        const invite = await db.prepare('SELECT * FROM studio_invites WHERE code=?').bind(typeof data.invite==='string'?data.invite:'').first();
+        if (!invite) fail(403,'邀请无效');
+        if(invite.revoked) fail(403,'邀请已撤销');
+        if(invite.expires<=Date.now()) fail(403,'邀请已过期');
+        if(invite.uses>=invite.max_uses) fail(403,'邀请使用次数已用尽');
         if (password.length < 10) fail(400, '密码至少需要 10 个字符');
         const salt = random(), digest = await passwordHash(password, salt, env.STUDIO_AUTH_SECRET); user = { id: random(), name };
-        try { await db.prepare('INSERT INTO studio_users VALUES(?,?,?,?,?)').bind(user.id, name, digest, salt, new Date().toISOString()).run(); }
+        try { const result=await db.batch([
+          db.prepare("INSERT INTO studio_users(id,name,password,salt,created) SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM studio_invites WHERE id=? AND revoked=0 AND expires>? AND uses<max_uses) RETURNING id").bind(user.id,name,digest,salt,new Date().toISOString(),invite.id,Date.now()),
+          db.prepare('UPDATE studio_invites SET uses=uses+1 WHERE id=? AND EXISTS(SELECT 1 FROM studio_users WHERE id=?)').bind(invite.id,user.id),
+          db.prepare('INSERT INTO studio_activity SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM studio_users WHERE id=?)').bind(random(),user.id,'join',user.id,new Date().toISOString(),user.id)
+        ]); if(!result[0].results.length) fail(403,'邀请已失效或用尽'); user.role='member'; }
         catch (error) { if (await db.prepare('SELECT id FROM studio_users WHERE name=?').bind(name).first()) fail(409, '该账号名称已存在'); throw error; }
       } else {
         const found = await db.prepare('SELECT * FROM studio_users WHERE name=?').bind(name).first();
         const digest = await passwordHash(password, found?.salt || 'unknown-user-dummy-salt', env.STUDIO_AUTH_SECRET);
-        if (!found || !secretEqual(digest, found.password)) fail(401, '账号或密码不正确');
-        user = { id: found.id, name: found.name };
+        if (!found || !(env.LOCAL_VERIFY && found.password.length===128 ? env.LOCAL_VERIFY(password,found) : secretEqual(digest, found.password))) fail(401, '账号或密码不正确');
+        if(!found.active) fail(403,'你已被移出团队，请联系队长'); user = { id: found.id, name: found.name,role:found.role };
       }
       return loginResponse(db, request, user);
     }
     const token = sessionToken(request);
-    const user = token && await db.prepare('SELECT u.id,u.name FROM studio_sessions s JOIN studio_users u ON u.id=s.user_id WHERE s.token=? AND s.expires>?').bind(await sha(token), Date.now()).first();
-    if (!user) fail(401, '请先登录');
-    if (route === '/me' && request.method === 'GET') return json(200, { user, invite: (await db.prepare('SELECT value FROM studio_settings WHERE key=?').bind('invite').first())?.value });
-    if (route === '/logout' && request.method === 'POST') { await db.prepare('DELETE FROM studio_sessions WHERE token=?').bind(await sha(token)).run(); return json(200, { ok: true }, { 'Set-Cookie': cookie(request) }); }
-    if (route === '/users' && request.method === 'GET') return json(200, (await db.prepare('SELECT id,name FROM studio_users ORDER BY name').all()).results);
-    if (route === '/items' && request.method === 'GET') return json(200, (await db.prepare('SELECT i.id,i.kind,i.title,i.body,i.status,i.assignee,i.priority,i.due,i.version,i.created,i.updated,i.author,(SELECT COUNT(*) FROM studio_images m WHERE m.item_id=i.id) AS imageCount FROM studio_items i ORDER BY i.updated DESC').all()).results);
-    const imgRoute = /^\/images\/([a-f0-9]{48})$/.exec(route);
+    const user = token && await db.prepare('SELECT u.id,u.name,u.role FROM studio_sessions s JOIN studio_users u ON u.id=s.user_id WHERE s.token=? AND s.expires>? AND u.active=1').bind(await sha(token), Date.now()).first();
+    if (!user) fail(401, '登录已失效或你已被移出团队，请重新登录或联系队长');
+    if (route === '/me' && request.method === 'GET') {
+      const invite=user.role==='captain' ? (await db.prepare('SELECT code FROM studio_invites WHERE revoked=0 AND expires>? AND uses<max_uses ORDER BY created DESC LIMIT 1').bind(Date.now()).first())?.code : undefined;
+      return json(200,{user,invite});
+    }
+    if (route === '/logout' && request.method === 'POST') { await db.prepare('DELETE FROM studio_sessions WHERE token=?').bind(await sha(token)).run(); return json(200,{ok:true},{'Set-Cookie':cookie(request)}); }
+    if (route === '/users' && request.method === 'GET') return json(200,(await db.prepare('SELECT id,name,role,created FROM studio_users WHERE active=1 ORDER BY role,name').all()).results);
+    const captain=()=>{if(user.role!=='captain')fail(403,'仅队长可以管理团队');};
+    if(route==='/invites'){
+      captain();
+      if(request.method==='GET')return json(200,(await db.prepare('SELECT * FROM studio_invites ORDER BY created DESC').all()).results);
+      if(request.method==='POST'){
+        const data=await readBody(request),days=Number(data.days),uses=Number(data.maxUses);
+        if(!Number.isInteger(days)||days<1||days>30||!Number.isInteger(uses)||uses<1||uses>100)fail(400,'有效期需为 1–30 天，使用次数需为 1–100');
+        const invitation={id:random(),code:random(),expires:Date.now()+days*86400000,max_uses:uses,uses:0,revoked:0,created:new Date().toISOString(),author:user.id};
+        await db.batch([db.prepare('INSERT INTO studio_invites VALUES(?,?,?,?,?,?,?,?)').bind(...Object.values(invitation)),activity(db,user,'invite',invitation.id)]);
+        return json(201,invitation);
+      }
+    }
+    const revoke=/^\/invites\/([a-f0-9]+)$/.exec(route);
+    if(revoke && request.method==='DELETE'){captain();await db.batch([db.prepare('UPDATE studio_invites SET revoked=1 WHERE id=?').bind(revoke[1]),activity(db,user,'revoke-invite',revoke[1])]);return json(200,{ok:true});}
+    const member=/^\/users\/([a-f0-9]+)$/.exec(route);
+    if(member && request.method==='DELETE'){
+      captain();const target=await db.prepare('SELECT id,role FROM studio_users WHERE id=? AND active=1').bind(member[1]).first();
+      if(!target)fail(404,'成员不存在');if(target.role==='captain'||target.id===user.id)fail(400,'不能移除队长');
+      await db.batch([db.prepare("UPDATE studio_users SET active=0 WHERE id=? AND role='member'").bind(target.id),db.prepare('DELETE FROM studio_sessions WHERE user_id=?').bind(target.id),db.prepare('DELETE FROM studio_follows WHERE user_id=?').bind(target.id),db.prepare("UPDATE studio_items SET assignee='',version=version+1,updated=? WHERE assignee=? AND status<>'done'").bind(new Date().toISOString(),target.id),activity(db,user,'remove',target.id)]);
+      return json(200,{ok:true});
+    }
+    if(route==='/notifications' && request.method==='GET'){
+      await dueNotifications(db,user);
+      return json(200,(await db.prepare("SELECT * FROM studio_notifications WHERE user_id=? AND (read_at='' OR id IN (SELECT id FROM studio_notifications WHERE user_id=? ORDER BY created DESC LIMIT 200)) ORDER BY created DESC").bind(user.id,user.id).all()).results);
+    }
+    if(route==='/notifications/read' && request.method==='POST'){
+      const data=await readBody(request);await db.prepare("UPDATE studio_notifications SET read_at=? WHERE user_id=? AND (id=? OR ?='all')").bind(new Date().toISOString(),user.id,data.id||'',data.id||'').run();return json(200,{ok:true});
+    }
+    const follow=/^\/items\/([a-f0-9]+)\/follow$/.exec(route);
+    if(follow && ['POST','DELETE'].includes(request.method)){
+      await getItem(db,follow[1]);
+      await db.prepare(request.method==='POST'?'INSERT OR IGNORE INTO studio_follows VALUES(?,?)':'DELETE FROM studio_follows WHERE item_id=? AND user_id=?').bind(follow[1],user.id).run();return json(200,{ok:true});
+    }
+    if (route === '/items' && request.method === 'GET') {
+      const rows=(await db.prepare("SELECT i.*,(SELECT name FROM studio_users WHERE id=i.author) AS authorName,(SELECT name FROM studio_users WHERE id=i.assignee) AS assigneeName,(SELECT COUNT(*) FROM studio_images m WHERE m.item_id=i.id) AS imageCount,EXISTS(SELECT 1 FROM studio_follows f WHERE f.item_id=i.id AND f.user_id=?) AS following FROM studio_items i ORDER BY i.updated DESC").bind(user.id).all()).results;
+      const edges=(await db.prepare('SELECT * FROM studio_dependencies').all()).results;
+      return json(200,rows.map(x=>({...x,status:x.blocked_reason?'blocked':x.status,dependencies:edges.filter(e=>e.item_id===x.id).map(e=>e.predecessor)})));
+    }
+    const imgRoute = /^\/images\/([a-f0-9]{32,48})$/.exec(route);
     if (imgRoute && request.method === 'GET') {
       const image = await db.prepare('SELECT i.type,d.data FROM studio_images i JOIN studio_image_data d ON d.id=i.id WHERE i.id=?').bind(imgRoute[1]).first();
       if (!image) fail(404, '图片不存在');
       return new Response(Uint8Array.from(atob(image.data), c => c.charCodeAt(0)), { headers: { ...security, 'Content-Type': image.type, 'Content-Disposition': 'inline' } });
     }
-    const match = /^\/items\/([a-f0-9]{48})$/.exec(route);
-    if (match && request.method === 'GET') return json(200, publicItem(await getItem(db, match[1])));
+    const match = /^\/items\/([a-f0-9]{32,48})$/.exec(route);
+    if (match && request.method === 'GET') return json(200, localItem(publicItem(await getItem(db, match[1])),env));
     if ((route === '/items' && request.method === 'POST') || (match && request.method === 'PUT')) {
-      const data = await readBody(request), fields = await fieldsFor(db, data), images = parseImages(data.newImages);
+      const data = await readBody(request), images = parseImages(data.newImages,env.LOCAL_MODE);
       const itemId = match?.[1] || random(), existing = match ? await getItem(db, itemId) : null;
+      const fields=await fieldsFor(db,data,existing);
       if (existing && data.version !== existing.version) fail(409, '其他成员已更新这条记录，请重新打开后编辑');
-      const keep = existing ? data.keepImages : [];
+      const keep = existing && Array.isArray(data.keepImages) ? data.keepImages.map(x=>env.LOCAL_MODE&&typeof x==='string'?x.replace('/api',BASE):x) : existing?null:[];
       if (!Array.isArray(keep) || new Set(keep).size !== keep.length || keep.some(src => !existing?.images.includes(src)) || keep.length + images.length > 5) fail(400, '附件无效，最多添加 5 张图片');
       const keepMeta = existing?.imageMeta.filter(x => keep.includes(`${BASE}/images/${x.id}`)) || [];
-      if (keepMeta.reduce((n, x) => n + x.size, 0) + images.reduce((n, x) => n + x.bytes.length, 0) > 5 * 512 * 1024) fail(400, '所有图片总大小不能超过 2.5MB');
+      if (keepMeta.reduce((n, x) => n + x.size, 0) + images.reduce((n, x) => n + x.bytes.length, 0) > (env.LOCAL_MODE?8*1024*1024:5*512*1024)) fail(400, '所有图片总大小不能超过 2.5MB');
       const now = new Date().toISOString(), mutation = random();
       const removed = existing?.imageMeta.filter(x => !keep.includes(`${BASE}/images/${x.id}`)) || [];
-      const statements = [existing ? db.prepare('UPDATE studio_items SET kind=?,title=?,body=?,status=?,assignee=?,priority=?,due=?,version=version+1,updated=?,mutation=? WHERE id=? AND version=? RETURNING id').bind(...fields, now, mutation, itemId, data.version) : db.prepare('INSERT INTO studio_items VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id').bind(itemId, ...fields, 1, now, now, user.id, mutation)];
+      const extras=await extraFields(db,data,existing,user,itemId);
+      const statements = [existing ? db.prepare('UPDATE studio_items SET kind=?,title=?,body=?,status=?,assignee=?,priority=?,due=?,version=version+1,updated=?,mutation=?,eta=?,progress=?,remaining=?,eta_reason=?,blocked_reason=? WHERE id=? AND version=? RETURNING id').bind(...fields, now, mutation,...extras.values, itemId, data.version) : db.prepare('INSERT INTO studio_items(id,kind,title,body,status,assignee,priority,due,version,created,updated,author,mutation,eta,progress,remaining,eta_reason,blocked_reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id').bind(itemId, ...fields, 1, now, now, user.id, mutation,...extras.values)];
       for (const image of removed) statements.push(db.prepare('DELETE FROM studio_images WHERE id=? AND EXISTS(SELECT 1 FROM studio_items WHERE id=? AND mutation=?)').bind(image.id, itemId, mutation));
       for (const image of images) {
         statements.push(db.prepare('INSERT INTO studio_images(id,item_id,type,size) SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM studio_items WHERE id=? AND mutation=?)').bind(image.id, itemId, image.type, image.bytes.length, itemId, mutation));
         statements.push(db.prepare('INSERT INTO studio_image_data(id,data) SELECT ?,? WHERE EXISTS(SELECT 1 FROM studio_items WHERE id=? AND mutation=?)').bind(image.id, image.data, itemId, mutation));
       }
+      statements.push(db.prepare('DELETE FROM studio_dependencies WHERE item_id=? AND EXISTS(SELECT 1 FROM studio_items WHERE id=? AND mutation=?)').bind(itemId,itemId,mutation));
+      for(const dependency of extras.dependencies)statements.push(db.prepare('INSERT INTO studio_dependencies SELECT ?,? WHERE EXISTS(SELECT 1 FROM studio_items WHERE id=? AND mutation=?)').bind(itemId,dependency,itemId,mutation));
+      // Cycle trigger validates against the committed graph, including concurrent writers.
       const result = await db.batch(statements);
       if (!result[0].results.length) fail(409, '其他成员已更新这条记录，请重新打开后编辑');
-      return json(existing ? 200 : 201, publicItem(await getItem(db, itemId)));
+      await changeNotifications(db,user,itemId,data,existing);
+      return json(existing ? 200 : 201, localItem(publicItem(await getItem(db, itemId)),env));
     }
     if (match && request.method === 'DELETE') {
       const data = await readBody(request), existing = await getItem(db, match[1]);
       if (!Number.isInteger(data.version)) fail(400, '版本号无效');
       if (existing.version !== data.version) fail(409, '记录已被更新，请重新打开后删除');
+      const dependents=(await db.prepare('SELECT item_id FROM studio_dependencies WHERE predecessor=?').bind(match[1]).all()).results;
+      if(dependents.length && !data.confirmDependencies)fail(409,'此记录是其他任务的前置项，删除将解除依赖，请确认后重试');
       const result = await db.prepare('DELETE FROM studio_items WHERE id=? AND version=? RETURNING id').bind(match[1], data.version).all();
       if (!result.results.length) fail(409, '记录已被更新，请重新打开后删除');
+      for(const dep of dependents)await notifyItem(db,dep.item_id,'前置任务已删除，请检查工作安排',`deleted:${match[1]}:${existing.version}`);
       return json(200, { ok: true });
     }
     fail(404, '接口不存在');
   } catch (error) {
+    if(String(error.message).includes('dependency cycle'))return json(400,{error:'不能创建循环依赖'});
     if (!Number.isInteger(error.status)) console.error('Studio API error', error);
     return json(Number.isInteger(error.status) ? error.status : 500, { error: Number.isInteger(error.status) ? error.message : '协作服务暂时无法处理请求，请检查数据库迁移和服务配置' });
+  }
+}
+
+function localItem(item,env){return env.LOCAL_MODE?{...item,images:item.images.map(x=>x.replace(BASE,'/api'))}:item;}
+function activity(db,user,event,target){return db.prepare('INSERT INTO studio_activity VALUES(?,?,?,?,?)').bind(random(),user.id,event,target,new Date().toISOString());}
+async function extraFields(db,data,existing,user,itemId){
+  const values=['eta','progress','remaining','eta_reason','blocked_reason'].map((key,i)=>text(data[key]??existing?.[key]??'',i===0?40:2000));
+  if(values[0] && (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/.test(values[0])||!Number.isFinite(Date.parse(values[0]))))fail(400,'预计完成时间需包含有效日期、时间和时区');
+  if(values[0]){if(new Date(values[0].slice(0,10)+'T00:00:00Z').toISOString().slice(0,10)!==values[0].slice(0,10))fail(400,'预计完成日期无效');values[0]=new Date(values[0]).toISOString();}
+  if(data.status==='blocked'&&!values[4])fail(400,'请填写阻塞原因');
+  if(data.status!=='blocked')values[4]='';
+  if(existing && user.id!==existing.assignee && user.role!=='captain' && values.slice(0,4).some((v,i)=>v!==existing[['eta','progress','remaining','eta_reason'][i]]))fail(403,'仅执行人或队长可以更新进度和预计完成时间');
+  const dependencies=data.dependencies??existing?.dependencies??[];
+  if(!Array.isArray(dependencies)||dependencies.length>30||new Set(dependencies).size!==dependencies.length||dependencies.some(x=>typeof x!=='string'))fail(400,'前置任务无效或超过 30 项');
+  const all=(await db.prepare('SELECT id,kind,status,blocked_reason FROM studio_items').all()).results;
+  for(const dep of dependencies){if(dep===itemId)fail(400,'不能依赖自身');if(!all.some(x=>x.id===dep&&x.kind==='task'))fail(400,'前置任务不存在或不是任务');}
+  if(data.kind!=='task'&&dependencies.length)fail(400,'仅任务可设置前置任务');
+  if(existing?.kind==='task'&&data.kind!=='task' && await db.prepare('SELECT item_id FROM studio_dependencies WHERE predecessor=? LIMIT 1').bind(itemId).first())fail(400,'此任务被其他任务依赖，不能更改类型');
+  if(data.status==='done'&&dependencies.some(id=>all.find(x=>x.id===id)?.status!=='done'))fail(400,'前置任务尚未完成，不能完成当前任务');
+  return {values,dependencies};
+}
+async function notify(db,userId,itemId,title,event){
+  if(!userId)return;
+  await db.prepare("INSERT OR IGNORE INTO studio_notifications(id,user_id,item_id,title,event_key,created) SELECT ?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM studio_users WHERE id=? AND active=1)").bind(random(),userId,itemId,title,event,new Date().toISOString(),userId).run();
+}
+async function notifyItem(db,itemId,title,event,actor=''){
+  const people=(await db.prepare("SELECT assignee AS id FROM studio_items WHERE id=? UNION SELECT user_id AS id FROM studio_follows WHERE item_id=?").bind(itemId,itemId).all()).results;
+  for(const person of people)if(person.id!==actor)await notify(db,person.id,itemId,title,event);
+}
+async function changeNotifications(db,user,itemId,data,existing){
+  const event=`change:${itemId}:${existing?existing.version+1:1}`;
+  if(data.assignee&&data.assignee!==existing?.assignee)await notify(db,data.assignee,itemId,`你被分配了：${data.title}`,`assigned:${event}`);
+  if(existing)await notifyItem(db,itemId,`记录已更新：${data.title}`,event,user.id);
+  if((data.status==='done')!==(existing?.status==='done')){
+    const downstream=(await db.prepare('SELECT item_id FROM studio_dependencies WHERE predecessor=?').bind(itemId).all()).results;
+    for(const dep of downstream)await notifyItem(db,dep.item_id,data.status==='done'?`前置任务已完成，请检查是否可以接手：${data.title}`:`前置任务已重新打开，请重新安排：${data.title}`,`dependency:${event}`);
+  }
+}
+async function dueNotifications(db,user){
+  const rows=(await db.prepare("SELECT DISTINCT i.* FROM studio_items i LEFT JOIN studio_follows f ON f.item_id=i.id AND f.user_id=? WHERE i.status<>'done' AND (i.assignee=? OR f.user_id=?)").bind(user.id,user.id,user.id).all()).results;
+  const now=Date.now();
+  for(const item of rows){
+    for(const [key,date] of [['due',item.due?item.due+'T23:59:59+08:00':''],['eta',item.eta]]){
+      if(!date)continue;const delta=Date.parse(date)-now;
+      if(delta>86400000)continue;
+      const state=delta<0?'overdue':'soon';
+      await notify(db,user.id,item.id,`${delta<0?'已逾期':'即将到期'}（${key==='eta'?'预计完成':'截止日期'}）：${item.title}`,`${key}:${item.id}:${date}:${state}`);
+    }
   }
 }
