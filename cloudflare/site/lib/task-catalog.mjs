@@ -17,3 +17,12 @@ export function normalizeTags(value){
 export function normalizeItem(item){
   return {...item,body:typeof item.body==='string'?item.body:'',assignee:item.assignee||'',due:item.due||'',status:item.status||'todo',priority:item.priority||'normal',tags:normalizeTags(item.tags),dependencies:Array.isArray(item.dependencies)?item.dependencies:[]};
 }
+
+export const BUG_TAG_GROUPS = [
+  ['问题类型', ['逻辑错误','碰撞/物理','显示异常','界面交互','动画异常','音频异常','性能问题','崩溃/卡死','输入控制','存档/读档','网络同步','兼容性']]
+];
+export const IDEA_TAG_GROUPS = [
+  ['草稿标签', ['玩法设计','剧情设定','关卡构思','角色设定','美术参考','音频灵感','系统机制','数值平衡','交互体验','技术方案','待验证','随手记录']]
+];
+export function tagGroupsFor(kind){return kind==='bug'?BUG_TAG_GROUPS:kind==='idea'?IDEA_TAG_GROUPS:TASK_TAG_GROUPS;}
+export function tagsFor(kind){return tagGroupsFor(kind).flatMap(([,tags])=>tags);}

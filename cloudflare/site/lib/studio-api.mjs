@@ -1,4 +1,4 @@
-import { TASK_TAGS, MAX_TASK_TAGS, normalizeTags } from './task-catalog.mjs';
+import { MAX_TASK_TAGS, normalizeTags, tagsFor } from './task-catalog.mjs';
 const BASE = '/ckunstudio/api';
 const COOKIE = 'ckunstudio_session';
 const encoder = new TextEncoder();
@@ -50,7 +50,7 @@ async function getItem(db, id) {
 }
 function publicItem(item) { const { imageMeta, ...rest } = item; return rest; }
 async function fieldsFor(db, data, existing) {
-  if(!existing && data.kind==='task'){data.status??='todo';data.assignee??='';data.priority??='normal';data.due??='';data.body??='';}
+  if(!existing && ['task','bug','idea'].includes(data.kind)){data.status??='todo';data.assignee??='';data.priority??='normal';data.due??='';data.body??='';}
   if (!['task', 'bug', 'idea'].includes(data.kind) || !['todo', 'doing', 'done', 'blocked'].includes(data.status) || !['low', 'normal', 'high', 'urgent'].includes(data.priority)) fail(400, '类型或状态无效');
   const assignee = text(data.assignee, 80);
   if(existing?.kind==='task'&&assignee!==existing.assignee)fail(403,'请通过认领操作成为任务执行人');
@@ -280,7 +280,7 @@ async function extraFields(db,data,existing,user,itemId){
   if(existing?.kind==='task'&&data.kind!=='task' && await db.prepare('SELECT item_id FROM studio_dependencies WHERE predecessor=? LIMIT 1').bind(itemId).first())fail(400,'此任务被其他任务依赖，不能更改类型');
   if(data.status==='done'&&dependencies.some(id=>all.find(x=>x.id===id)?.status!=='done'))fail(400,'前置任务尚未完成，不能完成当前任务');
   const tags=data.tags??existing?.tags??[];
-  if(!Array.isArray(tags)||tags.length>MAX_TASK_TAGS||new Set(tags).size!==tags.length||tags.some(tag=>!TASK_TAGS.includes(tag)))fail(400,`任务标签无效，最多选择 ${MAX_TASK_TAGS} 项`);
+  if(!Array.isArray(tags)||tags.length>MAX_TASK_TAGS||new Set(tags).size!==tags.length||tags.some(tag=>!tagsFor(data.kind).includes(tag)&&!existing?.tags?.includes(tag)))fail(400,`标签无效，最多选择 ${MAX_TASK_TAGS} 项`);
   values.push(JSON.stringify(tags));
   return {values,dependencies};
 }

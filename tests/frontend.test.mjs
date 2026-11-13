@@ -3,28 +3,28 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import {createHash} from 'node:crypto';
-import {TASK_TAG_GROUPS,COMMON_TASK_TAGS,MAX_TASK_TAGS,TASK_TAGS,normalizeItem,normalizeTags} from '../cloudflare/site/lib/task-catalog.mjs';
+import {TASK_TAG_GROUPS,COMMON_TASK_TAGS,MAX_TASK_TAGS,TASK_TAGS,normalizeItem,normalizeTags,tagGroupsFor} from '../cloudflare/site/lib/task-catalog.mjs';
 
 function browserHarness(){
  class Element{
-  constructor(dataset={}){this.dataset=dataset;this.innerHTML='';this.textContent='';this.value='';this.fields={};this.classes=new Set();this.classList={add:name=>this.classes.add(name),remove:name=>this.classes.delete(name),toggle:(name,on)=>on?this.classes.add(name):this.classes.delete(name)};}
-  addEventListener(){} querySelectorAll(){return [];} querySelector(){return new Element();}
+  constructor(dataset={}){this.checkedTags=[];this.dataset=dataset;this.innerHTML='';this.textContent='';this.value='';this.fields={};this.classes=new Set();this.classList={add:name=>this.classes.add(name),remove:name=>this.classes.delete(name),toggle:(name,on)=>on?this.classes.add(name):this.classes.delete(name)};}
+  addEventListener(){} querySelectorAll(selector){return selector.includes('name=tags')?this.checkedTags.map(value=>({value})):[];} querySelector(){return new Element();}
  }
  const nodes=new Map(),nav=[new Element({nav:'task'}),new Element({nav:'bug'}),new Element({nav:'idea'})],pages=[new Element({page:'work'}),new Element({page:'team'}),new Element({page:'notifications'})];
  const document={querySelector(selector){if(!nodes.has(selector))nodes.set(selector,new Element());return nodes.get(selector);},querySelectorAll(selector){return selector==='[data-nav]'?nav:selector==='[data-nav],[data-page]'?[...nav,...pages]:[];}};
  // Mirrors an old running API: both [] and JSON-encoded tag arrays, mixed legacy IDs.
  const records=[{id:'a'.repeat(32),kind:'task',title:'猫-待机状态-动画',body:'',status:'todo',assignee:'',tags:'[]',version:1,images:[]},{id:'b'.repeat(48),kind:'task',title:'猫-待机-动作',body:'',status:'todo',assignee:'',tags:'["动画"]',version:1,images:[]}];
- const fetch=async(url,options={})=>{let data;if(url==='/api/items'&&options.method==='POST'){const payload=JSON.parse(options.body);data={...payload,id:'new-task',version:1,images:[]};records.push({...data,tags:JSON.stringify(payload.tags)});}else if(url==='/api/items')data=structuredClone(records);else throw new Error('Unexpected request '+url);return {ok:true,status:200,json:async()=>data};};
+ const fetch=async(url,options={})=>{let data;if(url==='/api/items'&&options.method==='POST'){const payload=JSON.parse(options.body);data={...payload,id:'new-task',version:1,images:[]};records.push({...data,tags:JSON.stringify(payload.tags)});}else if(url==='/api/items')data=structuredClone(records);else if(url.startsWith('/api/items/')){const item=records.find(x=>x.id===url.split('/').pop());if(!item)throw new Error('Fixture not found');if(options.method==='PUT')Object.assign(item,JSON.parse(options.body),{version:item.version+1});data=structuredClone(item);}else throw new Error('Unexpected request '+url);return {ok:true,status:200,json:async()=>data};};
  class FormData{constructor(form){this.fields=form.fields;}*[Symbol.iterator](){yield*Object.entries(this.fields);}}
- const context=vm.createContext({document,window:{addEventListener(){}},console,fetch,FormData,Date,JSON,URLSearchParams,setTimeout:()=>1,clearTimeout(){},TASK_TAG_GROUPS,COMMON_TASK_TAGS,MAX_TASK_TAGS,normalizeItem});
+ const context=vm.createContext({document,window:{addEventListener(){}},console,fetch,FormData,Date,JSON,URLSearchParams,setTimeout:()=>1,clearTimeout(){},TASK_TAG_GROUPS,COMMON_TASK_TAGS,MAX_TASK_TAGS,normalizeItem,tagGroupsFor});
  const source=readFileSync('public/app.js','utf8').replace(/^import[^\n]+\n/,'').replace('\nboot();','\n');vm.runInContext(source,context);
- return {nodes,nav,pages,context,run:code=>vm.runInContext(code.includes('await ')?`(async()=>{${code}})()`:code,context),document};
+ return {nodes,nav,pages,records,context,run:code=>vm.runInContext(code.includes('await ')?`(async()=>{${code}})()`:code,context),document};
 }
 
 test('前端回归：旧版字符串标签不隐藏任务，主页与任务列表切换正确',async()=>{
  const ui=browserHarness();await ui.run("user={id:'member',name:'测试成员',role:'member'};users=[];items=await api('/api/items');kind='task';renderList();");
  assert.match(ui.nodes.get('#rows').innerHTML,/猫-待机状态-动画/);assert.match(ui.nodes.get('#rows').innerHTML,/猫-待机-动作/);assert.match(ui.nodes.get('#total').textContent,/显示 2 条 \/ 共 2 条/);
- ui.run('renderWork()');assert.match(ui.nodes.get('#content').innerHTML,/<h1>任务广场<\/h1>/);assert.doesNotMatch(ui.nodes.get('#content').innerHTML,/class="toolbar"/);assert.match(ui.nodes.get('#content').innerHTML,/猫-待机-动作/);assert.ok(ui.pages[0].classes.has('active'));assert.ok(!ui.nav[0].classes.has('active'));
+ ui.run('renderWork()');assert.match(ui.nodes.get('#content').innerHTML,/<h1>我的工作台<\/h1>/);assert.doesNotMatch(ui.nodes.get('#content').innerHTML,/class="toolbar"/);assert.doesNotMatch(ui.nodes.get('#content').innerHTML,/猫-待机-动作|主页任务广场|团队任务|publish-task/);assert.ok(ui.pages[0].classes.has('active'));assert.ok(!ui.nav[0].classes.has('active'));
  ui.run('renderList()');assert.match(ui.nodes.get('#content').innerHTML,/<h1>任务协作<\/h1>/);assert.ok(!ui.pages[0].classes.has('active'));assert.ok(ui.nav[0].classes.has('active'));
  ui.run("search='动画';updateList()");assert.match(ui.nodes.get('#total').textContent,/显示 2 条/);
 });
@@ -49,4 +49,26 @@ test('发布资源回归：页面与模块使用当前内容哈希，避免旧�
  assert.ok(html.includes('/ckunstudio/app.js?v='+hash('cloudflare/site/public/ckunstudio/app.js')));
  assert.ok(html.includes('/ckunstudio/style.css?v='+hash('public/style.css')));
  assert.ok(js.includes('./task-catalog.js?v='+hash('cloudflare/site/lib/task-catalog.mjs')));
+});
+
+
+for(const kind of ['bug','idea'])test(`简洁创建：${kind} 不需要分配、状态或时间`,async()=>{
+ const ui=browserHarness();await ui.run(`user={id:'member',name:'测试成员',role:'member'};users=[];items=await api('/api/items');kind='${kind}';renderList();await openEditor();`);
+ const html=ui.nodes.get('#content').innerHTML;assert.match(html,/name="title"/);assert.match(html,/name="body"/);assert.match(html,/name="tags"/);assert.doesNotMatch(html,/name="(?:status|assignee|due|eta|priority|progress|remaining)"/);
+ if(kind==='idea')assert.doesNotMatch(html,/type="file"|图片附件|id="upload"/);else assert.match(html,/type="file"/);
+ ui.document.querySelector('#editor').fields={title:kind==='bug'?'角色穿过墙壁':'跳跃玩法草案',body:'简短正文'};ui.document.querySelector('#editor').checkedTags=kind==='bug'?['碰撞/物理']:['玩法设计'];await ui.document.querySelector('#editor').onsubmit({preventDefault(){}});
+ assert.equal(ui.records.at(-1).kind,kind);assert.equal(ui.records.at(-1).assignee,'');assert.equal(ui.records.at(-1).due,'');assert.ok(ui.records.at(-1).tags.includes(kind==='bug'?'碰撞/物理':'玩法设计'));
+});
+
+test('草稿列表：忽略状态和执行人分类，始终显示创建与最后修改时间',async()=>{
+ const ui=browserHarness();ui.records.push({id:'idea-old',kind:'idea',title:'已完成状态的旧草稿',body:'旧正文',tags:'[]',status:'done',assignee:'other',priority:'high',due:'2026-12-31',version:1,images:['/api/images/history'],created:'2026-11-01T01:02:03Z',updated:'2026-11-12T04:05:06Z'});
+ await ui.run("user={id:'member',role:'member'};users=[];items=await api('/api/items');kind='idea';filter='doing';owner='nobody';renderList();");const html=ui.nodes.get('#content').innerHTML;
+ assert.doesNotMatch(html,/状态筛选|data-filter|id="owner"|id="stats"/);assert.match(html,/创建时间/);assert.match(html,/最后修改时间/);assert.match(ui.nodes.get('#rows').innerHTML,/已完成状态的旧草稿/);assert.match(ui.nodes.get('#rows').innerHTML,/2026-11-01T01:02:03Z/);assert.match(ui.nodes.get('#rows').innerHTML,/2026-11-12T04:05:06Z/);assert.equal(ui.nodes.get('#count-idea').textContent,1);
+ await ui.run("await openEditor('idea-old');");assert.doesNotMatch(ui.nodes.get('#content').innerHTML,/name="status"|name="assignee"/);ui.document.querySelector('#editor').fields={title:'旧草稿改名',body:'修改后正文'};await ui.document.querySelector('#editor').onsubmit({preventDefault(){}});
+ const saved=ui.records.find(x=>x.id==='idea-old');assert.equal(saved.created,'2026-11-01T01:02:03Z');assert.equal(saved.status,'done');assert.equal(saved.assignee,'other');assert.equal(saved.body,'修改后正文');assert.deepEqual(Array.from(saved.keepImages),['/api/images/history']);
+});
+
+test('主页只包含四个个人工作区，未认领团队任务不显示',async()=>{
+ const ui=browserHarness();await ui.run("user={id:'member',role:'member'};users=[];items=await api('/api/items');renderWork();");const html=ui.nodes.get('#content').innerHTML;
+ for(const label of ['我负责的','等待他人的','即将到期','已逾期'])assert.ok(html.includes(label));assert.equal((html.match(/class="work-section"/g)||[]).length,4);assert.doesNotMatch(html,/task-pool|pool-card|团队任务|publish-task/);
 });

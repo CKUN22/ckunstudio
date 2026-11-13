@@ -40,6 +40,10 @@ for(const local of [true,false])test(`P0 全流程：${local?'本地':'Cloudflar
  assert.equal((await req('/items',captain,'POST',{kind:'task',title:'过多标签',tags:['程序','动画','瓦片','背景图','视差背景','场景物件','音乐','音效','材质']})).status,400);
  assert.equal((await req('/items',captain,'POST',{kind:'task',title:'重复标签',tags:['程序','程序']})).status,400);
  assert.equal((await req('/items',captain,'POST',{kind:'task',title:'已完成',status:'done'})).status,201);
+ const minimalBug=await req('/items',member,'POST',{kind:'bug',title:'碰撞失效',body:'角色穿墙',tags:['碰撞/物理','显示异常']});assert.equal(minimalBug.status,201,JSON.stringify(minimalBug.data));assert.equal(minimalBug.data.assignee,'');assert.equal(minimalBug.data.due,'');assert.deepEqual(minimalBug.data.tags,['碰撞/物理','显示异常']);
+ const minimalIdea=await req('/items',member,'POST',{kind:'idea',title:'新跳跃方案',body:'二段跳',tags:['玩法设计','待验证']});assert.equal(minimalIdea.status,201,JSON.stringify(minimalIdea.data));assert.ok(minimalIdea.data.created);assert.ok(minimalIdea.data.updated);
+ const revisedIdea=await req('/items/'+minimalIdea.data.id,member,'PUT',{...minimalIdea.data,body:'三段跳试验',keepImages:[],newImages:[]});assert.equal(revisedIdea.status,200);assert.equal(revisedIdea.data.created,minimalIdea.data.created);assert.ok(Date.parse(revisedIdea.data.updated)>=Date.parse(minimalIdea.data.updated));assert.deepEqual(revisedIdea.data.tags,['玩法设计','待验证']);
+ assert.equal((await req('/items',member,'POST',{kind:'bug',title:'不匹配的标签',tags:['玩法设计']})).status,400);
  const image='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=';
  const base={kind:'task',title:'前置关卡',body:'测试',status:'todo',priority:'high',assignee:second.data.user.id,due:'',newImages:[image],eta:'2026-01-01T12:30:00+08:00',progress:'地形完成',remaining:'敌人点位',eta_reason:'估算',dependencies:[]};
  const a=await req('/items',member,'POST',base);assert.equal(a.status,201,JSON.stringify(a.data));assert.equal(a.data.eta,'2026-01-01T04:30:00.000Z');assert.equal(a.data.author,second.data.user.id);
