@@ -1,0 +1,17 @@
+// Local emulation only. Do not deploy this configuration or use --remote.
+{
+  "name": "gerenzhan-studio-local",
+  "pages_build_output_dir": "./dist",
+  "compatibility_date": "2026-11-13",
+  "d1_databases": [{
+    "binding": "STUDIO_DB",
+    "database_name": "ckunstudio-local",
+    "database_id": "00000000-0000-0000-0000-000000000001",
+    "migrations_dir": "migrations/studio"
+  }],
+  "r2_buckets": [{ "binding": "STUDIO_IMAGES", "bucket_name": "ckunstudio-images-local" }],
+  "vars": {
+    "STUDIO_AUTH_SECRET": "local-development-only-not-a-production-secret-2026",
+    "STUDIO_SETUP_KEY": "local-setup-key-do-not-use-in-production"
+  }
+}

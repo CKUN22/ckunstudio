@@ -1,5 +1,7 @@
 # Studio Flow · 游戏开发协作
 
+Cloudflare 网页端已接入个人站源码，目标地址为 `/ckunstudio`。部署步骤见 [Cloudflare 部署说明](cloudflare/DEPLOY.md)，运行时验证见 [验证记录](cloudflare/验证记录.md)。网页端使用 Pages Functions、D1 与私有 R2，无需持续运行本地 Node.js 服务。下面是原本地版的使用说明。
+
 面向 3 人 Godot 团队的协作软件最小可行版本。默认字体：微软雅黑。首版通过浏览器运行，后续可将相同界面封装为 Windows 11 桌面客户端。
 
 ## 启动
