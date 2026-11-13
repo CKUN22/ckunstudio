@@ -40,6 +40,6 @@ test('旧本地数据库升级：队长、原密码、旧会话、历史记录�
 test('旧 D1 迁移：明确指定最早账号为唯一队长并停用永久邀请码',()=>{
  const db=new DatabaseSync(':memory:');for(const file of ['0001_studio.sql','0002_d1_image_data.sql'])db.exec(readFileSync('cloudflare/site/migrations/studio/'+file,'utf8'));
  for(const [id,created] of [['later','2026-11-02'],['first','2026-11-01']])db.prepare('INSERT INTO studio_users VALUES(?,?,?,?,?)').run(id,id,'hash','salt',created);
- db.prepare('INSERT INTO studio_settings VALUES(?,?)').run('invite','legacy');db.exec(readFileSync('cloudflare/site/migrations/studio/0003_p0.sql','utf8'));
- assert.equal(db.prepare("SELECT id FROM studio_users WHERE role='captain'").get().id,'first');assert.equal(db.prepare("SELECT * FROM studio_settings WHERE key='invite'").get(),undefined);assert.equal(db.prepare('SELECT count(*) n FROM studio_users WHERE active=1').get().n,2);db.close();
+ db.prepare('INSERT INTO studio_settings VALUES(?,?)').run('invite','legacy');db.exec(readFileSync('cloudflare/site/migrations/studio/0003_p0.sql','utf8'));db.exec(readFileSync('cloudflare/site/migrations/studio/0004_task_claims.sql','utf8'));
+ assert.equal(db.prepare("SELECT id FROM studio_users WHERE role='captain'").get().id,'first');assert.equal(db.prepare("SELECT * FROM studio_settings WHERE key='invite'").get(),undefined);assert.equal(db.prepare('SELECT count(*) n FROM studio_users WHERE active=1').get().n,2);assert.equal(db.prepare('SELECT count(DISTINCT color) n FROM studio_users').get().n,2);db.close();
 });

@@ -45,4 +45,4 @@ const server=http.createServer(async(req,res)=>{
  res.writeHead(200,{'Content-Type':file[1]+'; charset=utf-8','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY','Content-Security-Policy':"default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"});res.end(readFileSync(path.join(root,'public',file[0])));
  }catch(e){console.error(e);res.writeHead(500);res.end('{"error":"服务暂时无法处理请求"}');}
 });
-server.listen(Number(process.env.PORT||3210),process.env.HOST||'127.0.0.1',()=>console.log(`Studio Flow: http://${process.env.HOST||'127.0.0.1'}:${process.env.PORT||3210}`));
+server.listen(Number(process.env.PORT||3210),process.env.HOST||'127.0.0.1',()=>console.log(`CKUN STUDIO: http://${process.env.HOST||'127.0.0.1'}:${process.env.PORT||3210}`));

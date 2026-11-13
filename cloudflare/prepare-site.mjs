@@ -19,11 +19,11 @@ js = js.replace("authMode='login', refreshTimer", "authMode='login', setupKeyReq
 js = js.replace("if(setup.needsSetup){authMode='setup';", "if(setup.needsSetup){setupKeyRequired=setup.setupKeyRequired===true;authMode='setup';");
 js = js.replace('<div id="auth-error"', '${setup&&setupKeyRequired?\'<label class="field">团队初始化密钥<input name="setupKey" type="password" required autocomplete="off" placeholder="由网站管理员在 Cloudflare 设置"></label>\':\'\'}<div id="auth-error"');
 js = js.replace('首次启动，请创建你的账号。', '首次启动，请使用管理员密钥创建团队。');
-js = js.replaceAll('Studio Flow', 'CKUN Studio');
+js = js.replaceAll('Studio Flow', 'CKUN STUDIO');
 js = js.replace('<div class="workspace">团队工作空间</div>', '<div class="workspace">团队工作空间 · <a href="/CK_STUDIO">返回官网 ↗</a></div>');
 await writeFile(path.join(assets, 'app.js'), js);
 let html = await readFile(path.join(appRoot, 'public/index.html'), 'utf8');
-html = html.replace('/style.css', '/ckunstudio/style.css').replace('/app.js', '/ckunstudio/app.js').replace('Studio Flow · 团队协作', 'CKUN Studio · 团队协作').replace('<title>', '<meta name="robots" content="noindex,nofollow"><title>');
+html = html.replace('/style.css', '/ckunstudio/style.css').replace('/app.js', '/ckunstudio/app.js').replace('Studio Flow · 团队协作', 'CKUN STUDIO · 团队协作').replace('<title>', '<meta name="robots" content="noindex,nofollow"><title>');
 await writeFile(path.join(assets, 'index.html'), html);
 await cp(path.join(appRoot, 'public/style.css'), path.join(assets, 'style.css'));
 
@@ -48,5 +48,5 @@ if (destination) {
   let ignore = await readFile(path.join(destination, '.gitignore'), 'utf8');
   if (!ignore.includes('.wrangler/')) { ignore += '\n# Cloudflare local data and secrets\n.wrangler/\n.dev.vars\n.dev.vars.*\n'; await writeFile(path.join(destination, '.gitignore'), ignore); }
   await cp(path.join(here, 'DEPLOY.md'), path.join(destination, 'CKUNSTUDIO部署说明.md'));
-  console.log('CKUN Studio integrated into: ' + destination);
+  console.log('CKUN STUDIO integrated into: ' + destination);
 } else console.log('Cloudflare assets prepared in cloudflare/site/public/ckunstudio');

@@ -40,17 +40,19 @@ async function readBody(request) {
 }
 function sessionToken(request) { return new RegExp(`(?:^|;\s*)${new URL(request.url).pathname.startsWith('/api/') ? 'session' : COOKIE}=([a-f0-9]{32,48})`).exec(request.headers.get('Cookie') || '')?.[1]; }
 function cookie(request, token = '') { return `${new URL(request.url).pathname.startsWith('/api/') ? 'session' : COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=${new URL(request.url).pathname.startsWith('/api/')?'/':'/ckunstudio'}; Max-Age=${token ? 604800 : 0}${new URL(request.url).protocol === 'https:' ? '; Secure' : ''}`; }
-const selectItem = 'SELECT i.*,(SELECT name FROM studio_users WHERE id=i.author) AS authorName,(SELECT name FROM studio_users WHERE id=i.assignee) AS assigneeName FROM studio_items i';
+const selectItem = 'SELECT i.*,(SELECT name FROM studio_users WHERE id=i.author) AS authorName,(SELECT name FROM studio_users WHERE id=i.assignee) AS assigneeName,(SELECT color FROM studio_users WHERE id=i.assignee) AS assigneeColor FROM studio_items i';
 async function getItem(db, id) {
   const item = await db.prepare(`${selectItem} WHERE i.id=?`).bind(id).first();
   if (!item) fail(404, '记录不存在');
   const images = (await db.prepare('SELECT id,type,size FROM studio_images WHERE item_id=? ORDER BY id').bind(id).all()).results;
-  return { ...item, status:item.blocked_reason ? 'blocked' : item.status, dependencies:(await db.prepare('SELECT predecessor FROM studio_dependencies WHERE item_id=?').bind(id).all()).results.map(x=>x.predecessor), images: images.map(x => `${BASE}/images/${x.id}`), imageMeta: images };
+  return { ...item, tags:JSON.parse(item.tags||'[]'), status:item.blocked_reason ? 'blocked' : item.status, dependencies:(await db.prepare('SELECT predecessor FROM studio_dependencies WHERE item_id=?').bind(id).all()).results.map(x=>x.predecessor), images: images.map(x => `${BASE}/images/${x.id}`), imageMeta: images };
 }
 function publicItem(item) { const { imageMeta, ...rest } = item; return rest; }
 async function fieldsFor(db, data, existing) {
+  if(!existing && data.kind==='task'){data.status??='todo';data.assignee??='';data.priority??='normal';data.due??='';data.body??='';}
   if (!['task', 'bug', 'idea'].includes(data.kind) || !['todo', 'doing', 'done', 'blocked'].includes(data.status) || !['low', 'normal', 'high', 'urgent'].includes(data.priority)) fail(400, '类型或状态无效');
   const assignee = text(data.assignee, 80);
+  if(existing?.kind==='task'&&assignee!==existing.assignee)fail(403,'请通过认领操作成为任务执行人');
   if (assignee && assignee!==existing?.assignee && !await db.prepare('SELECT id FROM studio_users WHERE id=? AND active=1').bind(assignee).first()) fail(400, '执行人不存在');
   const due = text(data.due, 10);
   if (due && (!/^\d{4}-\d{2}-\d{2}$/.test(due) || !Number.isFinite(Date.parse(due)) || new Date(due).toISOString().slice(0, 10) !== due)) fail(400, '日期无效');
@@ -133,7 +135,7 @@ export async function onRequest(context) {
         if (password.length < 10) fail(400, '密码至少需要 10 个字符');
         const salt = random(), digest = await passwordHash(password, salt, env.STUDIO_AUTH_SECRET); user = { id: random(), name };
         try { const result=await db.batch([
-          db.prepare("INSERT INTO studio_users(id,name,password,salt,created) SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM studio_invites WHERE id=? AND revoked=0 AND expires>? AND uses<max_uses) RETURNING id").bind(user.id,name,digest,salt,new Date().toISOString(),invite.id,Date.now()),
+          db.prepare("INSERT INTO studio_users(id,name,password,salt,created,color) SELECT ?,?,?,?,?,(SELECT p.color FROM (SELECT value AS color FROM json_each('[0,1,2,3,4,5,6,7,8,9,10,11]')) p LEFT JOIN studio_users u ON u.color=p.color AND u.active=1 GROUP BY p.color ORDER BY COUNT(u.id),p.color LIMIT 1) WHERE EXISTS(SELECT 1 FROM studio_invites WHERE id=? AND revoked=0 AND expires>? AND uses<max_uses) RETURNING id").bind(user.id,name,digest,salt,new Date().toISOString(),invite.id,Date.now()),
           db.prepare('UPDATE studio_invites SET uses=uses+1 WHERE id=? AND EXISTS(SELECT 1 FROM studio_users WHERE id=?)').bind(invite.id,user.id),
           db.prepare('INSERT INTO studio_activity SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM studio_users WHERE id=?)').bind(random(),user.id,'join',user.id,new Date().toISOString(),user.id)
         ]); if(!result[0].results.length) fail(403,'邀请已失效或用尽'); user.role='member'; }
@@ -147,14 +149,14 @@ export async function onRequest(context) {
       return loginResponse(db, request, user);
     }
     const token = sessionToken(request);
-    const user = token && await db.prepare('SELECT u.id,u.name,u.role FROM studio_sessions s JOIN studio_users u ON u.id=s.user_id WHERE s.token=? AND s.expires>? AND u.active=1').bind(await sha(token), Date.now()).first();
+    const user = token && await db.prepare('SELECT u.id,u.name,u.role,u.color FROM studio_sessions s JOIN studio_users u ON u.id=s.user_id WHERE s.token=? AND s.expires>? AND u.active=1').bind(await sha(token), Date.now()).first();
     if (!user) fail(401, '登录已失效或你已被移出团队，请重新登录或联系队长');
     if (route === '/me' && request.method === 'GET') {
       const invite=user.role==='captain' ? (await db.prepare('SELECT code FROM studio_invites WHERE revoked=0 AND expires>? AND uses<max_uses ORDER BY created DESC LIMIT 1').bind(Date.now()).first())?.code : undefined;
       return json(200,{user,invite});
     }
     if (route === '/logout' && request.method === 'POST') { await db.prepare('DELETE FROM studio_sessions WHERE token=?').bind(await sha(token)).run(); return json(200,{ok:true},{'Set-Cookie':cookie(request)}); }
-    if (route === '/users' && request.method === 'GET') return json(200,(await db.prepare('SELECT id,name,role,created FROM studio_users WHERE active=1 ORDER BY role,name').all()).results);
+    if (route === '/users' && request.method === 'GET') return json(200,(await db.prepare('SELECT id,name,role,created,color FROM studio_users WHERE active=1 ORDER BY role,name').all()).results);
     const captain=()=>{if(user.role!=='captain')fail(403,'仅队长可以管理团队');};
     if(route==='/invites'){
       captain();
@@ -183,15 +185,29 @@ export async function onRequest(context) {
     if(route==='/notifications/read' && request.method==='POST'){
       const data=await readBody(request);await db.prepare("UPDATE studio_notifications SET read_at=? WHERE user_id=? AND (id=? OR ?='all')").bind(new Date().toISOString(),user.id,data.id||'',data.id||'').run();return json(200,{ok:true});
     }
+    const claim=/^\/items\/([a-f0-9]+)\/claim$/.exec(route);
+    if(claim && request.method==='POST'){
+      const data=await readBody(request),existing=await getItem(db,claim[1]);
+      if(existing.kind!=='task')fail(400,'仅任务可以认领');
+      if(!Number.isInteger(data.version))fail(400,'请刷新后重新认领');
+      const now=new Date().toISOString(),mutation=random();
+      const result=await db.batch([
+        db.prepare("UPDATE studio_items SET assignee=?,version=version+1,updated=?,mutation=? WHERE id=? AND version=? AND assignee='' AND status<>'done' AND EXISTS(SELECT 1 FROM studio_users WHERE id=? AND active=1) RETURNING id").bind(user.id,now,mutation,existing.id,data.version,user.id),
+        db.prepare("INSERT INTO studio_activity SELECT ?,?,'claim',?,? WHERE EXISTS(SELECT 1 FROM studio_items WHERE id=? AND mutation=?)").bind(random(),user.id,existing.id,now,existing.id,mutation)
+      ]);
+      if(!result[0].results.length)fail(409,'任务已被认领或更新，请刷新后查看');
+      await changeNotifications(db,user,existing.id,{...existing,assignee:user.id},existing);
+      return json(200,localItem(publicItem(await getItem(db,existing.id)),env));
+    }
     const follow=/^\/items\/([a-f0-9]+)\/follow$/.exec(route);
     if(follow && ['POST','DELETE'].includes(request.method)){
       await getItem(db,follow[1]);
       await db.prepare(request.method==='POST'?'INSERT OR IGNORE INTO studio_follows VALUES(?,?)':'DELETE FROM studio_follows WHERE item_id=? AND user_id=?').bind(follow[1],user.id).run();return json(200,{ok:true});
     }
     if (route === '/items' && request.method === 'GET') {
-      const rows=(await db.prepare("SELECT i.*,(SELECT name FROM studio_users WHERE id=i.author) AS authorName,(SELECT name FROM studio_users WHERE id=i.assignee) AS assigneeName,(SELECT COUNT(*) FROM studio_images m WHERE m.item_id=i.id) AS imageCount,EXISTS(SELECT 1 FROM studio_follows f WHERE f.item_id=i.id AND f.user_id=?) AS following FROM studio_items i ORDER BY i.updated DESC").bind(user.id).all()).results;
+      const rows=(await db.prepare("SELECT i.*,(SELECT name FROM studio_users WHERE id=i.author) AS authorName,(SELECT name FROM studio_users WHERE id=i.assignee) AS assigneeName,(SELECT color FROM studio_users WHERE id=i.assignee) AS assigneeColor,(SELECT COUNT(*) FROM studio_images m WHERE m.item_id=i.id) AS imageCount,EXISTS(SELECT 1 FROM studio_follows f WHERE f.item_id=i.id AND f.user_id=?) AS following FROM studio_items i ORDER BY i.updated DESC").bind(user.id).all()).results;
       const edges=(await db.prepare('SELECT * FROM studio_dependencies').all()).results;
-      return json(200,rows.map(x=>({...x,status:x.blocked_reason?'blocked':x.status,dependencies:edges.filter(e=>e.item_id===x.id).map(e=>e.predecessor)})));
+      return json(200,rows.map(x=>({...x,tags:JSON.parse(x.tags||'[]'),status:x.blocked_reason?'blocked':x.status,dependencies:edges.filter(e=>e.item_id===x.id).map(e=>e.predecessor)})));
     }
     const imgRoute = /^\/images\/([a-f0-9]{32,48})$/.exec(route);
     if (imgRoute && request.method === 'GET') {
@@ -213,7 +229,7 @@ export async function onRequest(context) {
       const now = new Date().toISOString(), mutation = random();
       const removed = existing?.imageMeta.filter(x => !keep.includes(`${BASE}/images/${x.id}`)) || [];
       const extras=await extraFields(db,data,existing,user,itemId);
-      const statements = [existing ? db.prepare('UPDATE studio_items SET kind=?,title=?,body=?,status=?,assignee=?,priority=?,due=?,version=version+1,updated=?,mutation=?,eta=?,progress=?,remaining=?,eta_reason=?,blocked_reason=? WHERE id=? AND version=? RETURNING id').bind(...fields, now, mutation,...extras.values, itemId, data.version) : db.prepare('INSERT INTO studio_items(id,kind,title,body,status,assignee,priority,due,version,created,updated,author,mutation,eta,progress,remaining,eta_reason,blocked_reason) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id').bind(itemId, ...fields, 1, now, now, user.id, mutation,...extras.values)];
+      const statements = [existing ? db.prepare('UPDATE studio_items SET kind=?,title=?,body=?,status=?,assignee=?,priority=?,due=?,version=version+1,updated=?,mutation=?,eta=?,progress=?,remaining=?,eta_reason=?,blocked_reason=?,tags=? WHERE id=? AND version=? RETURNING id').bind(...fields, now, mutation,...extras.values, itemId, data.version) : db.prepare('INSERT INTO studio_items(id,kind,title,body,status,assignee,priority,due,version,created,updated,author,mutation,eta,progress,remaining,eta_reason,blocked_reason,tags) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id').bind(itemId, ...fields, 1, now, now, user.id, mutation,...extras.values)];
       for (const image of removed) statements.push(db.prepare('DELETE FROM studio_images WHERE id=? AND EXISTS(SELECT 1 FROM studio_items WHERE id=? AND mutation=?)').bind(image.id, itemId, mutation));
       for (const image of images) {
         statements.push(db.prepare('INSERT INTO studio_images(id,item_id,type,size) SELECT ?,?,?,? WHERE EXISTS(SELECT 1 FROM studio_items WHERE id=? AND mutation=?)').bind(image.id, itemId, image.type, image.bytes.length, itemId, mutation));
@@ -262,6 +278,9 @@ async function extraFields(db,data,existing,user,itemId){
   if(data.kind!=='task'&&dependencies.length)fail(400,'仅任务可设置前置任务');
   if(existing?.kind==='task'&&data.kind!=='task' && await db.prepare('SELECT item_id FROM studio_dependencies WHERE predecessor=? LIMIT 1').bind(itemId).first())fail(400,'此任务被其他任务依赖，不能更改类型');
   if(data.status==='done'&&dependencies.some(id=>all.find(x=>x.id===id)?.status!=='done'))fail(400,'前置任务尚未完成，不能完成当前任务');
+  const tags=data.tags??existing?.tags??[];
+  if(!Array.isArray(tags)||tags.length>5||new Set(tags).size!==tags.length||tags.some(tag=>!['程序','2D贴图','动画','音乐','音效'].includes(tag)))fail(400,'任务标签无效');
+  values.push(JSON.stringify(tags));
   return {values,dependencies};
 }
 async function notify(db,userId,itemId,title,event){
