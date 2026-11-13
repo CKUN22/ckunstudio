@@ -8,6 +8,8 @@ const staged = path.join(here, 'site');
 const destination = process.argv[2] && path.resolve(process.argv[2]);
 const assets = path.join(staged, 'public', 'ckunstudio');
 await mkdir(assets, { recursive: true });
+await cp(path.join(staged,'lib/task-catalog.mjs'),path.join(appRoot,'public/task-catalog.js'));
+await cp(path.join(staged,'lib/task-catalog.mjs'),path.join(assets,'task-catalog.js'));
 let js = await readFile(path.join(appRoot, 'public/app.js'), 'utf8');
 const readerExpression = 'files.map(f=>new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(new Error(\'图片读取失败\'));reader.readAsDataURL(f);}))';
 if (!js.includes(readerExpression)) throw new Error('Upload code changed; review cloud image preprocessing');

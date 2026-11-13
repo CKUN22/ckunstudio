@@ -17,6 +17,7 @@ test('团队协作：认证、邀请、三类记录、图片、冲突和持久�
   const base=`http://127.0.0.1:${port}`;
   async function request(route,{cookie,method='GET',data,origin}={}){const response=await fetch(base+route,{method,headers:{...(cookie?{Cookie:cookie}:{}),...(origin?{Origin:origin}:{}),'Content-Type':'application/json'},...(data?{body:JSON.stringify(data)}:{})});const result=await response.json();return {status:response.status,data:result,cookie:response.headers.get('set-cookie')?.split(';')[0]};}
   assert.equal((await request('/api/setup')).data.needsSetup,true);
+  const catalog=await fetch(base+'/task-catalog.js');assert.equal(catalog.status,200);assert.equal(catalog.headers.get('cache-control'),'no-store');assert.match(await catalog.text(),/瓦片/);
   assert.equal((await request('/api/items')).status,401);
   const first=await request('/api/setup',{method:'POST',data:{name:'策划',password:'strong-password-123'}});
   assert.equal(first.status,201);const cookie=first.cookie,invite=first.data.invite;

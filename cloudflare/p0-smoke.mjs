@@ -23,12 +23,13 @@ const oversized=Buffer.alloc(512*1024+1);Buffer.from([137,80,78,71,13,10,26,10])
 const revoked=await req('/invites',captain,'DELETE',{});assert.equal(revoked.status,404);
 assert.equal((await req('/invites/'+invite.data.id,captain,'DELETE',{})).status,200);
 assert.equal((await req('/register','','POST',{name:'撤销邀请'+suffix,password,invite:invite.data.code})).status,403);
-const published=await req('/items',captain,'POST',{kind:'task',title:'运行时自主认领',tags:['程序','动画']});assert.equal(published.status,201);assert.equal(published.data.assignee,'');assert.equal(published.data.due,'');
-const claims=await Promise.all([captain,member].map(cookie=>req('/items/'+published.data.id+'/claim',cookie,'POST',{version:published.data.version})));assert.deepEqual(claims.map(x=>x.status).sort(),[200,409]);assert.ok(Number.isInteger(claims.find(x=>x.status===200).data.assigneeColor));assert.deepEqual(claims.find(x=>x.status===200).data.tags,['程序','动画']);
+const published=await req('/items',captain,'POST',{kind:'task',title:'运行时自主认领',tags:['程序','动画','瓦片','背景图','视差背景','场景物件']});assert.equal(published.status,201);assert.equal(published.data.assignee,'');assert.equal(published.data.due,'');
+const claims=await Promise.all([captain,member].map(cookie=>req('/items/'+published.data.id+'/claim',cookie,'POST',{version:published.data.version})));assert.deepEqual(claims.map(x=>x.status).sort(),[200,409]);assert.ok(Number.isInteger(claims.find(x=>x.status===200).data.assigneeColor));assert.deepEqual(claims.find(x=>x.status===200).data.tags,['程序','动画','瓦片','背景图','视差背景','场景物件']);
 assert.equal((await req('/users/'+second.data.user.id,captain,'DELETE',{})).status,200);
 for(const route of ['/items','/users','/items/'+a.data.id])assert.equal((await req(route,member)).status,401);
 assert.equal((await fetch(base+a.data.images[0],{headers:{Cookie:member}})).status,401);
 const kept=await req('/items/'+a.data.id,captain);assert.equal(kept.data.authorName,'P0运行时成员'+suffix);assert.equal((await req('/items/'+b.data.id,captain)).data.assignee,'');
 assert.equal((await fetch(base+'/ckunstudio/app.js')).status,200);
 assert.ok((await (await fetch(base+'/ckunstudio/app.js')).text()).includes('任务广场'));
+assert.equal((await fetch(base+'/ckunstudio/task-catalog.js')).status,200);assert.ok((await (await fetch(base+'/ckunstudio/task-catalog.js')).text()).includes('瓦片'));
 console.log('PASS: real Cloudflare Pages + D1 P0 roles, expiring/limited/revoked invitations, private images, progress, cycle rejection, dependency notifications, read persistence, member removal and history + task tags, minimal publishing, stable member colors and atomic competing claims');

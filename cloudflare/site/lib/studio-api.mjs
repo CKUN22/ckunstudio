@@ -1,3 +1,4 @@
+import { TASK_TAGS, MAX_TASK_TAGS, normalizeTags } from './task-catalog.mjs';
 const BASE = '/ckunstudio/api';
 const COOKIE = 'ckunstudio_session';
 const encoder = new TextEncoder();
@@ -45,7 +46,7 @@ async function getItem(db, id) {
   const item = await db.prepare(`${selectItem} WHERE i.id=?`).bind(id).first();
   if (!item) fail(404, '记录不存在');
   const images = (await db.prepare('SELECT id,type,size FROM studio_images WHERE item_id=? ORDER BY id').bind(id).all()).results;
-  return { ...item, tags:JSON.parse(item.tags||'[]'), status:item.blocked_reason ? 'blocked' : item.status, dependencies:(await db.prepare('SELECT predecessor FROM studio_dependencies WHERE item_id=?').bind(id).all()).results.map(x=>x.predecessor), images: images.map(x => `${BASE}/images/${x.id}`), imageMeta: images };
+  return { ...item, tags:normalizeTags(item.tags), status:item.blocked_reason ? 'blocked' : item.status, dependencies:(await db.prepare('SELECT predecessor FROM studio_dependencies WHERE item_id=?').bind(id).all()).results.map(x=>x.predecessor), images: images.map(x => `${BASE}/images/${x.id}`), imageMeta: images };
 }
 function publicItem(item) { const { imageMeta, ...rest } = item; return rest; }
 async function fieldsFor(db, data, existing) {
@@ -207,7 +208,7 @@ export async function onRequest(context) {
     if (route === '/items' && request.method === 'GET') {
       const rows=(await db.prepare("SELECT i.*,(SELECT name FROM studio_users WHERE id=i.author) AS authorName,(SELECT name FROM studio_users WHERE id=i.assignee) AS assigneeName,(SELECT color FROM studio_users WHERE id=i.assignee) AS assigneeColor,(SELECT COUNT(*) FROM studio_images m WHERE m.item_id=i.id) AS imageCount,EXISTS(SELECT 1 FROM studio_follows f WHERE f.item_id=i.id AND f.user_id=?) AS following FROM studio_items i ORDER BY i.updated DESC").bind(user.id).all()).results;
       const edges=(await db.prepare('SELECT * FROM studio_dependencies').all()).results;
-      return json(200,rows.map(x=>({...x,tags:JSON.parse(x.tags||'[]'),status:x.blocked_reason?'blocked':x.status,dependencies:edges.filter(e=>e.item_id===x.id).map(e=>e.predecessor)})));
+      return json(200,rows.map(x=>({...x,tags:normalizeTags(x.tags),status:x.blocked_reason?'blocked':x.status,dependencies:edges.filter(e=>e.item_id===x.id).map(e=>e.predecessor)})));
     }
     const imgRoute = /^\/images\/([a-f0-9]{32,48})$/.exec(route);
     if (imgRoute && request.method === 'GET') {
@@ -279,7 +280,7 @@ async function extraFields(db,data,existing,user,itemId){
   if(existing?.kind==='task'&&data.kind!=='task' && await db.prepare('SELECT item_id FROM studio_dependencies WHERE predecessor=? LIMIT 1').bind(itemId).first())fail(400,'此任务被其他任务依赖，不能更改类型');
   if(data.status==='done'&&dependencies.some(id=>all.find(x=>x.id===id)?.status!=='done'))fail(400,'前置任务尚未完成，不能完成当前任务');
   const tags=data.tags??existing?.tags??[];
-  if(!Array.isArray(tags)||tags.length>5||new Set(tags).size!==tags.length||tags.some(tag=>!['程序','2D贴图','动画','音乐','音效'].includes(tag)))fail(400,'任务标签无效');
+  if(!Array.isArray(tags)||tags.length>MAX_TASK_TAGS||new Set(tags).size!==tags.length||tags.some(tag=>!TASK_TAGS.includes(tag)))fail(400,`任务标签无效，最多选择 ${MAX_TASK_TAGS} 项`);
   values.push(JSON.stringify(tags));
   return {values,dependencies};
 }

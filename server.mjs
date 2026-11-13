@@ -31,6 +31,8 @@ for(const name of readdirSync(path.join(root,'cloudflare/site/migrations/studio'
 }
 function statement(sql){let values=[];return {bind(...args){values=args;return this;},async first(){return sqlite.prepare(sql).get(...values)||null;},async all(){return {results:sqlite.prepare(sql).all(...values)};},async run(){const r=sqlite.prepare(sql).run(...values);return {meta:{changes:Number(r.changes)},results:[]};},execute(){return {results:sqlite.prepare(sql).all(...values)};}};}
 const db={prepare:statement,async batch(statements){sqlite.exec('BEGIN IMMEDIATE');try{const results=statements.map(s=>s.execute());sqlite.exec('COMMIT');return results;}catch(e){sqlite.exec('ROLLBACK');throw e;}}};
+// Keep browser assets paired with the API loaded by this process until restart.
+const assets=Object.fromEntries(['index.html','app.js','style.css','task-catalog.js'].map(name=>[name,readFileSync(path.join(root,'public',name))]));
 const server=http.createServer(async(req,res)=>{
  try{
  const origin=`${req.headers['x-forwarded-proto']==='https'||process.env.COOKIE_SECURE==='1'?'https':'http'}://${req.headers.host}`,url=new URL(req.url,origin);
@@ -40,9 +42,9 @@ const server=http.createServer(async(req,res)=>{
    const response=await onRequest({request,env:{STUDIO_DB:db,STUDIO_AUTH_SECRET:'local-development-secret-not-used-for-scrypt',LOCAL_MODE:true,LOCAL_VERIFY:(password,user)=>timingSafeEqual(scryptSync(password,user.salt,64),Buffer.from(user.password,'hex'))}});
    res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()));return;
  }
- const files={'/':['index.html','text/html'],'/app.js':['app.js','text/javascript'],'/style.css':['style.css','text/css']};const file=files[url.pathname];
+ const files={'/':['index.html','text/html'],'/app.js':['app.js','text/javascript'],'/task-catalog.js':['task-catalog.js','text/javascript'],'/style.css':['style.css','text/css']};const file=files[url.pathname];
  if(!file||req.method!=='GET'){res.writeHead(404);res.end();return;}
- res.writeHead(200,{'Content-Type':file[1]+'; charset=utf-8','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY','Content-Security-Policy':"default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"});res.end(readFileSync(path.join(root,'public',file[0])));
+ res.writeHead(200,{'Content-Type':file[1]+'; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY','Content-Security-Policy':"default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"});res.end(assets[file[0]]);
  }catch(e){console.error(e);res.writeHead(500);res.end('{"error":"服务暂时无法处理请求"}');}
 });
 server.listen(Number(process.env.PORT||3210),process.env.HOST||'127.0.0.1',()=>console.log(`CKUN STUDIO: http://${process.env.HOST||'127.0.0.1'}:${process.env.PORT||3210}`));

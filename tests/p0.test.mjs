@@ -26,17 +26,18 @@ for(const local of [true,false])test(`P0 全流程：${local?'本地':'Cloudflar
  const revoked=await req('/invites',captain,'POST',{days:1,maxUses:1});assert.equal((await req('/invites/'+revoked.data.id,captain,'DELETE',{})).status,200);assert.match((await req('/register','','POST',{name:'撤销',password,invite:revoked.data.code})).data.error,/撤销/);
  const raced=await req('/invites',captain,'POST',{days:1,maxUses:1});const racedResults=await Promise.all(['竞争一','竞争二'].map(name=>req('/register','','POST',{name,password,invite:raced.data.code})));assert.deepEqual(racedResults.map(x=>x.status).sort(),[200,403]);
  // Publishing needs only a title and optional tags; claim is an atomic competing operation.
- const published=await req('/items',captain,'POST',{kind:'task',title:'待认领动画',tags:['动画','2D贴图']});
- assert.equal(published.status,201,JSON.stringify(published.data));assert.equal(published.data.assignee,'');assert.equal(published.data.due,'');assert.equal(published.data.eta,'');assert.deepEqual(published.data.tags,['动画','2D贴图']);
+ const published=await req('/items',captain,'POST',{kind:'task',title:'待认领动画',tags:['动画','瓦片','背景图','视差背景','场景物件','2D贴图']});
+ assert.equal(published.status,201,JSON.stringify(published.data));assert.equal(published.data.assignee,'');assert.equal(published.data.due,'');assert.equal(published.data.eta,'');assert.deepEqual(published.data.tags,['动画','瓦片','背景图','视差背景','场景物件','2D贴图']);
  const colors=(await req('/users',captain)).data.map(x=>x.color);assert.equal(new Set(colors).size,colors.length);
  assert.equal((await req('/items/'+published.data.id+'/claim','','POST',{version:1})).status,401);
  const claims=await Promise.all([member,observer].map(cookie=>req('/items/'+published.data.id+'/claim',cookie,'POST',{version:published.data.version})));
  assert.deepEqual(claims.map(x=>x.status).sort(),[200,409]);const claimed=claims.find(x=>x.status===200).data;
- assert.ok([second.data.user.id,third.data.user.id].includes(claimed.assignee));assert.ok(Number.isInteger(claimed.assigneeColor));assert.deepEqual(claimed.tags,['动画','2D贴图']);
+ assert.ok([second.data.user.id,third.data.user.id].includes(claimed.assignee));assert.ok(Number.isInteger(claimed.assigneeColor));assert.deepEqual(claimed.tags,['动画','瓦片','背景图','视差背景','场景物件','2D贴图']);
  assert.equal((await req('/items/'+published.data.id+'/claim',captain,'POST',{version:claimed.version})).status,409);
  assert.equal((await req('/items/'+published.data.id,member,'PUT',{...claimed,assignee:first.data.user.id,keepImages:[],newImages:[]})).status,403);
- const tagged=await req('/items/'+published.data.id,captain,'PUT',{...claimed,title:'动画需求更新',keepImages:[],newImages:[]});assert.equal(tagged.status,200);assert.deepEqual(tagged.data.tags,['动画','2D贴图']);
+ const tagged=await req('/items/'+published.data.id,captain,'PUT',{...claimed,title:'动画需求更新',keepImages:[],newImages:[]});assert.equal(tagged.status,200);assert.deepEqual(tagged.data.tags,['动画','瓦片','背景图','视差背景','场景物件','2D贴图']);
  assert.equal((await req('/items',captain,'POST',{kind:'task',title:'非法标签',tags:['任意脚本']})).status,400);
+ assert.equal((await req('/items',captain,'POST',{kind:'task',title:'过多标签',tags:['程序','动画','瓦片','背景图','视差背景','场景物件','音乐','音效','材质']})).status,400);
  assert.equal((await req('/items',captain,'POST',{kind:'task',title:'重复标签',tags:['程序','程序']})).status,400);
  assert.equal((await req('/items',captain,'POST',{kind:'task',title:'已完成',status:'done'})).status,201);
  const image='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aXioAAAAASUVORK5CYII=';
