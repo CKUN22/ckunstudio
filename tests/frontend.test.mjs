@@ -16,9 +16,10 @@ function browserHarness(){
  const records=[{id:'a'.repeat(32),kind:'task',title:'猫-待机状态-动画',body:'',status:'todo',assignee:'',tags:'[]',version:1,images:[]},{id:'b'.repeat(48),kind:'task',title:'猫-待机-动作',body:'',status:'todo',assignee:'',tags:'["动画"]',version:1,images:[]}];
  const fetch=async(url,options={})=>{let data;if(url==='/api/items'&&options.method==='POST'){const payload=JSON.parse(options.body);data={...payload,id:'new-task',version:1,images:[]};records.push({...data,tags:JSON.stringify(payload.tags)});}else if(url==='/api/items')data=structuredClone(records);else if(url.startsWith('/api/items/')){const item=records.find(x=>x.id===url.split('/').pop());if(!item)throw new Error('Fixture not found');if(options.method==='PUT')Object.assign(item,JSON.parse(options.body),{version:item.version+1});data=structuredClone(item);}else throw new Error('Unexpected request '+url);return {ok:true,status:200,json:async()=>data};};
  class FormData{constructor(form){this.fields=form.fields;}*[Symbol.iterator](){yield*Object.entries(this.fields);}}
- const context=vm.createContext({document,window:{addEventListener(){}},console,fetch,FormData,Date,JSON,URLSearchParams,setTimeout:()=>1,clearTimeout(){},TASK_CATEGORIES,TASK_TAG_GROUPS,COMMON_TASK_TAGS,MAX_TASK_TAGS,normalizeItem,tagGroupsFor});
+ const entries=[],events={};let position=-1;const history={replaceState(state){entries[position<0?++position:position]=state;},pushState(state){entries.splice(++position);entries[position]=state;},go(delta){position+=delta;return events.popstate({state:entries[position]});}};
+ const context=vm.createContext({document,window:{history,addEventListener(name,callback){events[name]=callback;}},console,fetch,FormData,Date,JSON,URLSearchParams,setTimeout:()=>1,clearTimeout(){},TASK_CATEGORIES,TASK_TAG_GROUPS,COMMON_TASK_TAGS,MAX_TASK_TAGS,normalizeItem,tagGroupsFor});
  const source=readFileSync('public/app.js','utf8').replace(/^import[^\n]+\n/,'').replace('\nboot();','\n');vm.runInContext(source,context);
- return {nodes,nav,pages,records,context,run:code=>vm.runInContext(code.includes('await ')?`(async()=>{${code}})()`:code,context),document};
+ return {nodes,nav,pages,records,context,history,entries,run:code=>vm.runInContext(code.includes('await ')?`(async()=>{${code}})()`:code,context),document};
 }
 
 test('前端回归：旧版字符串标签不隐藏任务，主页与任务列表切换正确',async()=>{
@@ -122,4 +123,21 @@ test('任务分类：筛选独立于素材标签，编辑可更改且保留分�
  const ui=browserHarness();await ui.run("user={id:'member',role:'member'};users=[];items=[normalizeItem({id:'role',kind:'task',title:'主角动作-待机',tags:['动画'],status:'todo',images:[]}),normalizeItem({id:'map',kind:'task',title:'关卡-map1',tags:['瓦片'],status:'todo',images:[]})];kind='task';categoryFilter='地图';renderList();");
  assert.match(ui.nodes.get('#rows').innerHTML,/关卡-map1/);assert.doesNotMatch(ui.nodes.get('#rows').innerHTML,/主角动作/);assert.match(ui.nodes.get('#content').innerHTML,/任务分类筛选/);
  await ui.run('await openEditor()');assert.match(ui.nodes.get('#content').innerHTML,/name="category"/);assert.match(ui.nodes.get('#content').innerHTML,/value="地图" selected/);
+});
+
+
+test('分类图标：四类任务具有不同矢量图形，品牌为几何六芒星',()=>{
+ const ui=browserHarness();const icons=['角色','地图','物品','机制'].map(category=>ui.run(`itemIcon({kind:'task',category:'${category}'})`));
+ assert.equal(new Set(icons).size,4);for(const icon of icons)assert.match(icon,/<svg/);
+ assert.match(ui.run('brandMark'),/M12 2.5/);assert.match(ui.run('brandMark'),/M12 21.5/);
+});
+test('浏览器历史：详情返回列表，分类上下文保留，首页返回仍留在站内',async()=>{
+ const ui=browserHarness();await ui.run("user={id:'member',role:'member'};users=[];items=await api('/api/items');renderWork();kind='task';categoryFilter='角色';renderList();await openEditor(items[0].id);");
+ assert.equal(ui.run('page'),'editor');await ui.history.go(-1);assert.equal(ui.run('page'),'list');assert.equal(ui.run('categoryFilter'),'角色');
+ await ui.history.go(-1);assert.equal(ui.run('page'),'work');await ui.history.go(-1);assert.equal(ui.run('page'),'work');assert.equal(ui.entries.at(-1).page,'work');
+});
+test('浏览器历史：取消丢弃编辑时恢复历史位置和未保存内容',async()=>{
+ const ui=browserHarness();await ui.run("user={id:'member',role:'member'};items=await api('/api/items');renderList();await openEditor(items[0].id);dirty=true;confirmDialog=async()=>false;");
+ await ui.history.go(-1);assert.equal(ui.run('page'),'editor');assert.equal(ui.run('dirty'),true);assert.equal(ui.run('undoingNavigation'),false);
+ await ui.run('confirmDialog=async()=>true');await ui.history.go(-1);assert.equal(ui.run('page'),'list');
 });
