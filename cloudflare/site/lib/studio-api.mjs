@@ -1,3 +1,5 @@
+import {verificationSettings,makeChallenge,solveChallenge,hasClearance} from './verification.mjs';
+import {trafficReport} from './telemetry.mjs';
 import { TASK_CATEGORIES, inferTaskCategory, MAX_TASK_TAGS, normalizeTags, tagsFor } from './task-catalog.mjs';
 const BASE = '/ckunstudio/api';
 const COOKIE = 'ckunstudio_session';
@@ -14,6 +16,7 @@ function json(status, data, headers = {}) {
 }
 const fail = (code, message) => { throw Object.assign(new Error(message), { status: code }); };
 const random = () => Array.from(crypto.getRandomValues(new Uint8Array(24)), b => b.toString(16).padStart(2, '0')).join('');
+const inviteCode = () => Array.from(crypto.getRandomValues(new Uint8Array(5)), b => b.toString(16).padStart(2,'0')).join('');
 const hex = buffer => Array.from(new Uint8Array(buffer), b => b.toString(16).padStart(2, '0')).join('');
 const sha = async value => hex(await crypto.subtle.digest('SHA-256', encoder.encode(value)));
 const text = (value, max, required = false) => {
@@ -39,9 +42,9 @@ async function readBody(request) {
   const bytes = new Uint8Array(length); let offset = 0; for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
   try { const data = JSON.parse(new TextDecoder().decode(bytes) || '{}'); if (!data || Array.isArray(data) || typeof data !== 'object') fail(400, '请求格式错误'); return data; } catch { fail(400, '请求格式错误'); }
 }
-function sessionToken(request) { return new RegExp(`(?:^|;\s*)${new URL(request.url).pathname.startsWith('/api/') ? 'session' : COOKIE}=([a-f0-9]{32,48})`).exec(request.headers.get('Cookie') || '')?.[1]; }
+function sessionToken(request) { const name=new URL(request.url).pathname.startsWith('/api/')?'session':COOKIE;const value=(request.headers.get('Cookie')||'').split(';').map(x=>x.trim()).find(x=>x.startsWith(name+'='))?.slice(name.length+1);return /^[a-f0-9]{32,48}$/.test(value||'')?value:undefined; }
 function cookie(request, token = '') { return `${new URL(request.url).pathname.startsWith('/api/') ? 'session' : COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=${new URL(request.url).pathname.startsWith('/api/')?'/':'/ckunstudio'}; Max-Age=${token ? 604800 : 0}${new URL(request.url).protocol === 'https:' ? '; Secure' : ''}`; }
-const selectItem = 'SELECT i.*,(SELECT name FROM studio_users WHERE id=i.author) AS authorName,(SELECT name FROM studio_users WHERE id=i.assignee) AS assigneeName,(SELECT color FROM studio_users WHERE id=i.assignee) AS assigneeColor FROM studio_items i';
+const selectItem = `SELECT i.*,(SELECT COALESCE(NULLIF(nickname,''),name) FROM studio_users WHERE id=i.author) AS authorName,(SELECT COALESCE(NULLIF(nickname,''),name) FROM studio_users WHERE id=i.assignee) AS assigneeName,(SELECT color FROM studio_users WHERE id=i.assignee) AS assigneeColor FROM studio_items i`;
 async function getItem(db, id) {
   const item = await db.prepare(`${selectItem} WHERE i.id=?`).bind(id).first();
   if (!item) fail(404, '记录不存在');
@@ -73,6 +76,20 @@ function parseImages(sources = [], local = false) {
     return { id: random(), type: match[1], bytes, data: match[2] };
   });
 }
+function validateAvatarDimensions(image) {
+ const b=image.bytes,view=new DataView(b.buffer,b.byteOffset,b.byteLength);let width=0,height=0;
+ if(image.type==='image/png'&&b.length>=24){width=view.getUint32(16);height=view.getUint32(20);}
+ else if(image.type==='image/webp'&&b.length>=30){
+  const chunk=String.fromCharCode(...b.slice(12,16));
+  if(chunk==='VP8X'){width=1+b[24]+(b[25]<<8)+(b[26]<<16);height=1+b[27]+(b[28]<<8)+(b[29]<<16);}
+  else if(chunk==='VP8L'&&b[20]===47){width=1+b[21]+((b[22]&63)<<8);height=1+(b[22]>>6)+(b[23]<<2)+((b[24]&15)<<10);}
+  else if(chunk==='VP8 '&&b[23]===157&&b[24]===1&&b[25]===42){width=view.getUint16(26,true)&16383;height=view.getUint16(28,true)&16383;}
+ }
+ else if(image.type==='image/jpeg'){
+  for(let at=2;at+8<b.length;){if(b[at]!==255)break;const marker=b[at+1];if(marker===217||marker===218)break;const length=view.getUint16(at+2);if(length<2||at+2+length>b.length)break;if([192,193,194,195,197,198,199,201,202,203,205,206,207].includes(marker)){height=view.getUint16(at+5);width=view.getUint16(at+7);break;}at+=2+length;}
+ }
+ if(width<1||height<1||width>1024||height>1024)fail(400,'头像尺寸无效，请通过用户信息页重新压缩上传');
+}
 async function rateLimit(db, request, route) {
   const now = Date.now(), window = Math.floor(now / 900000);
   const key = await sha(`${request.headers.get('CF-Connecting-IP') || 'local'}:${route}:${window}`);
@@ -96,9 +113,20 @@ export async function onRequest(context) {
     if (!url.pathname.startsWith(base + '/')) fail(404, '接口不存在');
     if (!env.STUDIO_DB || !env.STUDIO_AUTH_SECRET || env.STUDIO_AUTH_SECRET.length < 32) fail(503, '协作服务尚未配置完成，请联系站点管理员绑定数据库和认证密钥');
     const db = env.STUDIO_DB.withSession ? env.STUDIO_DB.withSession('first-primary') : env.STUDIO_DB;
+    if (!['GET','HEAD','POST','PUT','DELETE'].includes(request.method)) fail(405,'不支持的请求方法');
     if (['POST', 'PUT', 'DELETE'].includes(request.method)) {
+      if (request.headers.get('Sec-Fetch-Site') === 'cross-site') fail(403,'请求来源无效');
       if (request.headers.get('Origin') && request.headers.get('Origin') !== url.origin) fail(403, '请求来源无效');
       if (!request.headers.get('Content-Type')?.startsWith('application/json')) fail(415, '请使用 JSON 请求');
+    }
+    if(route==='/verification'){
+      await rateLimit(db,request,'verification:'+request.method);
+      if(request.method==='GET')return json(200,await makeChallenge(db,env,request));
+      if(request.method==='POST')return json(200,{ok:true},{'Set-Cookie':await solveChallenge(db,env,request,await readBody(request))});
+    }
+    if(['/setup','/login','/register'].includes(route)&&request.method==='POST'){
+      const protection=await verificationSettings(db,env);
+      if(protection.mode!=='off'&&!await hasClearance(env,request))fail(403,'请先完成网站访问验证，再登录或注册');
     }
     if (route === '/setup' && request.method === 'GET') {
       return json(200, { needsSetup: !await db.prepare('SELECT id FROM studio_users LIMIT 1').first(), setupKeyRequired: !env.LOCAL_MODE });
@@ -107,11 +135,11 @@ export async function onRequest(context) {
       await rateLimit(db, request, route);
       if (await db.prepare('SELECT id FROM studio_users LIMIT 1').first()) fail(409, '团队已初始化，请使用邀请码加入');
       const data = await readBody(request);
-      if (!env.LOCAL_MODE && (!env.STUDIO_SETUP_KEY || env.STUDIO_SETUP_KEY.length < 24)) fail(503, '管理员尚未设置团队初始化密钥');
+      if (!env.LOCAL_MODE && (!env.STUDIO_SETUP_KEY || env.STUDIO_SETUP_KEY.length < (env.PRIVATE_TEST_MODE?8:24))) fail(503, '管理员尚未设置团队初始化密钥');
       if (!env.LOCAL_MODE && !secretEqual(data.setupKey, env.STUDIO_SETUP_KEY)) fail(403, '初始化密钥不正确');
       const name = text(data.name, 40, true), password = text(data.password, 200, true);
       if (password.length < 10) fail(400, '密码至少需要 10 个字符');
-      const uid = random(), salt = random(), invite = random(), mutation = random();
+      const uid = random(), salt = random(), invite = inviteCode(), mutation = random();
       const digest = await passwordHash(password, salt, env.STUDIO_AUTH_SECRET);
       // The unique setup marker and both inserts commit atomically, even across isolates.
       try {
@@ -150,14 +178,58 @@ export async function onRequest(context) {
       return loginResponse(db, request, user);
     }
     const token = sessionToken(request);
-    const user = token && await db.prepare('SELECT u.id,u.name,u.role,u.color FROM studio_sessions s JOIN studio_users u ON u.id=s.user_id WHERE s.token=? AND s.expires>? AND u.active=1').bind(await sha(token), Date.now()).first();
+    const user = token && await db.prepare(`SELECT u.id,COALESCE(NULLIF(u.nickname,''),u.name) AS name,u.name AS loginName,u.nickname,u.avatar_version,u.role,u.color FROM studio_sessions s JOIN studio_users u ON u.id=s.user_id WHERE s.token=? AND s.expires>? AND u.active=1`).bind(await sha(token), Date.now()).first();
     if (!user) fail(401, '登录已失效或你已被移出团队，请重新登录或联系队长');
+    const adminIds=(env.SITE_ADMIN_USER_IDS||'').split(',').map(x=>x.trim()).filter(Boolean);
+    user.siteAdmin=adminIds.length?adminIds.includes(user.id):user.role==='captain';
+    if (route === '/me' && request.method === 'PUT') {
+      await rateLimit(db,request,'profile:'+user.id);
+      const data=await readBody(request),nickname=text(data.nickname,40,true);
+      let image;
+      if(data.avatar!==undefined&&data.avatar!==null){
+        image=parseImages([data.avatar])[0];
+        if(image.bytes.length>=256*1024)fail(400,'头像必须小于 256KB');
+        validateAvatarDimensions(image);
+        image.version=await sha(image.data);
+      }
+      const statements=[db.prepare('UPDATE studio_users SET nickname=? WHERE id=?').bind(nickname,user.id)];
+      if(image){statements.push(db.prepare('INSERT INTO studio_avatars(user_id,version,type,size,data) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET version=excluded.version,type=excluded.type,size=excluded.size,data=excluded.data').bind(user.id,image.version,image.type,image.bytes.length,image.data),db.prepare('UPDATE studio_users SET avatar_version=? WHERE id=?').bind(image.version,user.id));}
+      if(data.avatar===null)statements.push(db.prepare('DELETE FROM studio_avatars WHERE user_id=?').bind(user.id),db.prepare("UPDATE studio_users SET avatar_version='' WHERE id=?").bind(user.id));
+      statements.push(activity(db,user,'profile-update',user.id));
+      await db.batch(statements);
+      return json(200,{user:{...user,name:nickname,nickname,avatar_version:image?image.version:data.avatar===null?'':user.avatar_version}});
+    }
+    const avatarMatch=/^\/avatars\/([a-f0-9]{32,48})$/.exec(route);
+    if(avatarMatch&&request.method==='GET'){
+      const image=await db.prepare('SELECT a.* FROM studio_avatars a JOIN studio_users u ON u.id=a.user_id WHERE a.user_id=? AND u.active=1').bind(avatarMatch[1]).first();
+      if(!image||url.searchParams.get('v')!==image.version)fail(404,'头像版本不存在');
+      const etag='"'+image.version+'"',headers={...security,'Content-Type':image.type,'Cache-Control':'private, max-age=31536000, immutable','ETag':etag,'Vary':'Cookie'};
+      if(request.headers.get('If-None-Match')===etag)return new Response(null,{status:304,headers});
+      const bytes=Uint8Array.from(atob(image.data),c=>c.charCodeAt(0));
+      return new Response(bytes,{headers:{...headers,'Content-Length':String(bytes.length)}});
+    }
+    if(route==='/admin/verification'){
+      if(!user.siteAdmin)fail(403,'仅网站管理员可修改验证设置');
+      if(request.method==='GET')return json(200,await verificationSettings(db,env));
+      if(request.method==='PUT'){
+        const data=await readBody(request);
+        if(!['auto','manual','turnstile','off'].includes(data.mode)||typeof data.protectSite!=='boolean')fail(400,'验证设置无效');
+        const settings=await verificationSettings(db,env);
+        if(data.mode==='turnstile'&&!settings.turnstileConfigured)fail(400,'请先配置 TURNSTILE_SITE_KEY 和 TURNSTILE_SECRET_KEY');
+        await db.batch([db.prepare("INSERT INTO studio_settings(key,value) VALUES('site_verification',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify({mode:data.mode,protectSite:data.protectSite})),activity(db,user,'verification-settings','site')]);
+        return json(200,await verificationSettings(db,env));
+      }
+    }
+    if(route==='/admin/analytics'&&request.method==='GET'){
+      if(!user.siteAdmin)fail(403,'仅网站管理员可查看统计');
+      return json(200,await trafficReport(db,url));
+    }
     if (route === '/me' && request.method === 'GET') {
       const invite=user.role==='captain' ? (await db.prepare('SELECT code FROM studio_invites WHERE revoked=0 AND expires>? AND uses<max_uses ORDER BY created DESC LIMIT 1').bind(Date.now()).first())?.code : undefined;
       return json(200,{user,invite});
     }
     if (route === '/logout' && request.method === 'POST') { await db.prepare('DELETE FROM studio_sessions WHERE token=?').bind(await sha(token)).run(); return json(200,{ok:true},{'Set-Cookie':cookie(request)}); }
-    if (route === '/users' && request.method === 'GET') return json(200,(await db.prepare('SELECT id,name,role,created,color FROM studio_users WHERE active=1 ORDER BY role,name').all()).results);
+    if (route === '/users' && request.method === 'GET') return json(200,(await db.prepare(`SELECT id,COALESCE(NULLIF(nickname,''),name) AS name,role,created,color,avatar_version FROM studio_users WHERE active=1 ORDER BY role,name`).all()).results);
     const captain=()=>{if(user.role!=='captain')fail(403,'仅队长可以管理团队');};
     if(route==='/invites'){
       captain();
@@ -165,7 +237,7 @@ export async function onRequest(context) {
       if(request.method==='POST'){
         const data=await readBody(request),days=Number(data.days),uses=Number(data.maxUses);
         if(!Number.isInteger(days)||days<1||days>30||!Number.isInteger(uses)||uses<1||uses>100)fail(400,'有效期需为 1–30 天，使用次数需为 1–100');
-        const invitation={id:random(),code:random(),expires:Date.now()+days*86400000,max_uses:uses,uses:0,revoked:0,created:new Date().toISOString(),author:user.id};
+        const invitation={id:random(),code:inviteCode(),expires:Date.now()+days*86400000,max_uses:uses,uses:0,revoked:0,created:new Date().toISOString(),author:user.id};
         await db.batch([db.prepare('INSERT INTO studio_invites VALUES(?,?,?,?,?,?,?,?)').bind(...Object.values(invitation)),activity(db,user,'invite',invitation.id)]);
         return json(201,invitation);
       }
@@ -208,7 +280,7 @@ export async function onRequest(context) {
       await db.prepare(request.method==='POST'?'INSERT OR IGNORE INTO studio_follows VALUES(?,?)':'DELETE FROM studio_follows WHERE item_id=? AND user_id=?').bind(follow[1],user.id).run();return json(200,{ok:true});
     }
     if (route === '/items' && request.method === 'GET') {
-      const rows=(await db.prepare("SELECT i.*,(SELECT name FROM studio_users WHERE id=i.author) AS authorName,(SELECT name FROM studio_users WHERE id=i.assignee) AS assigneeName,(SELECT color FROM studio_users WHERE id=i.assignee) AS assigneeColor,(SELECT COUNT(*) FROM studio_images m WHERE m.item_id=i.id) AS imageCount,EXISTS(SELECT 1 FROM studio_follows f WHERE f.item_id=i.id AND f.user_id=?) AS following FROM studio_items i ORDER BY i.updated DESC").bind(user.id).all()).results;
+      const rows=(await db.prepare("SELECT i.*,(SELECT COALESCE(NULLIF(nickname,''),name) FROM studio_users WHERE id=i.author) AS authorName,(SELECT COALESCE(NULLIF(nickname,''),name) FROM studio_users WHERE id=i.assignee) AS assigneeName,(SELECT color FROM studio_users WHERE id=i.assignee) AS assigneeColor,(SELECT COUNT(*) FROM studio_images m WHERE m.item_id=i.id) AS imageCount,EXISTS(SELECT 1 FROM studio_follows f WHERE f.item_id=i.id AND f.user_id=?) AS following FROM studio_items i ORDER BY i.updated DESC").bind(user.id).all()).results;
       const edges=(await db.prepare('SELECT * FROM studio_dependencies').all()).results;
       return json(200,rows.map(x=>({...x,tags:normalizeTags(x.tags),status:x.blocked_reason?'blocked':x.status,dependencies:edges.filter(e=>e.item_id===x.id).map(e=>e.predecessor)})));
     }

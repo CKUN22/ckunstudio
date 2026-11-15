@@ -1,5 +1,1 @@
-{
-  "version": 1,
-  "include": ["/ckunstudio/api/*"],
-  "exclude": []
-}
+{"version":1,"include":["/*"],"exclude":["/favicon.svg","/favicon.ico","/_astro/*","/ckunstudio/*.js","/ckunstudio/*.css","/robots.txt","/sitemap*.xml"]}

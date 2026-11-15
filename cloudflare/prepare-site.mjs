@@ -36,13 +36,16 @@ await cp(path.join(appRoot, 'public/style.css'), path.join(assets, 'style.css'))
 
 if (destination) {
   // Copy only the integration's named paths. Preserve the rest of the personal site.
-  for (const relative of ['functions/ckunstudio', 'lib', 'migrations/studio', 'public/ckunstudio']) {
+  for (const relative of ['functions/ckunstudio', 'functions/_middleware.js', 'lib', 'migrations/studio', 'public/ckunstudio']) {
     await cp(path.join(staged, relative), path.join(destination, relative), { recursive: true });
   }
   for (const name of ['_headers', '_routes.json']) {
     const target = path.join(destination, 'public', name);
     let exists = false; try { await access(target); exists = true; } catch {}
-    if (exists && await readFile(target, 'utf8') !== await readFile(path.join(staged, 'public', name), 'utf8')) throw new Error(`Review existing public/${name} before merging`);
+    if (exists && await readFile(target, 'utf8') !== await readFile(path.join(staged, 'public', name), 'utf8')) {
+      const previous=name==='_routes.json'?JSON.parse(await readFile(target,'utf8')):null;
+      if(!previous||previous.version!==1||JSON.stringify(previous.include)!==JSON.stringify(['/ckunstudio/api/*'])||previous.exclude?.length)throw new Error(`Review existing public/${name} before merging`);
+    }
     await cp(path.join(staged, 'public', name), target);
   }
   await cp(path.join(staged, 'wrangler.studio.local.jsonc'), path.join(destination, 'wrangler.studio.local.jsonc'));

@@ -7,6 +7,7 @@ import {onRequest} from '../cloudflare/site/lib/studio-api.mjs';
 for(const local of [true,false])test(`P0 全流程：${local?'本地':'Cloudflare'} 权限、邀请、依赖、进度、通知、移除`,async()=>{
  const sql=new DatabaseSync(':memory:');sql.exec('PRAGMA foreign_keys=ON');
  for(const file of readdirSync('cloudflare/site/migrations/studio').sort())sql.exec(readFileSync('cloudflare/site/migrations/studio/'+file,'utf8'));
+ sql.prepare("INSERT INTO studio_settings(key,value) VALUES('site_verification',?)").run(JSON.stringify({mode:'off',protectSite:false}));
  function prepare(query){let args=[];return {bind(...values){args=values;return this;},async first(){return sql.prepare(query).get(...args)||null;},async all(){return {results:sql.prepare(query).all(...args)};},async run(){const result=sql.prepare(query).run(...args);return {meta:{changes:result.changes}};},execute(){return {results:sql.prepare(query).all(...args)};}};}
  const db={prepare,async batch(statements){sql.exec('BEGIN IMMEDIATE');try{const results=statements.map(s=>s.execute());sql.exec('COMMIT');return results;}catch(e){sql.exec('ROLLBACK');throw e;}}};
  const env={STUDIO_DB:db,STUDIO_AUTH_SECRET:'local-development-secret-not-used-for-scrypt',STUDIO_SETUP_KEY:'local-setup-key-do-not-use-in-production',LOCAL_MODE:local};

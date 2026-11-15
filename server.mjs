@@ -1,3 +1,5 @@
+import {verificationSettings,hasClearance,verificationPage} from './cloudflare/site/lib/verification.mjs';
+import {blockedRequest,recordTraffic,telemetryFailure} from './cloudflare/site/lib/telemetry.mjs';
 import {scryptSync,timingSafeEqual} from 'node:crypto';
 import http from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
@@ -32,16 +34,28 @@ for(const name of readdirSync(path.join(root,'cloudflare/site/migrations/studio'
 function statement(sql){let values=[];return {bind(...args){values=args;return this;},async first(){return sqlite.prepare(sql).get(...values)||null;},async all(){return {results:sqlite.prepare(sql).all(...values)};},async run(){const r=sqlite.prepare(sql).run(...values);return {meta:{changes:Number(r.changes)},results:[]};},execute(){return {results:sqlite.prepare(sql).all(...values)};}};}
 const db={prepare:statement,async batch(statements){sqlite.exec('BEGIN IMMEDIATE');try{const results=statements.map(s=>s.execute());sqlite.exec('COMMIT');return results;}catch(e){sqlite.exec('ROLLBACK');throw e;}}};
 // Keep browser assets paired with the API loaded by this process until restart.
+const verifyAssets=Object.fromEntries(['verify.js','verify.css'].map(name=>[name,readFileSync(path.join(root,'cloudflare/site/public/ckunstudio',name))]));
 const assets=Object.fromEntries(['index.html','app.js','style.css','task-catalog.js'].map(name=>[name,readFileSync(path.join(root,'public',name))]));
+const serviceEnv={STUDIO_DB:db,STUDIO_AUTH_SECRET:process.env.STUDIO_AUTH_SECRET||'local-development-secret-not-used-for-scrypt',LOCAL_MODE:true,TURNSTILE_SITE_KEY:process.env.TURNSTILE_SITE_KEY,TURNSTILE_SECRET_KEY:process.env.TURNSTILE_SECRET_KEY,SITE_ADMIN_USER_IDS:process.env.SITE_ADMIN_USER_IDS,LOCAL_VERIFY:(password,user)=>timingSafeEqual(scryptSync(password,user.salt,64),Buffer.from(user.password,'hex'))};
 const server=http.createServer(async(req,res)=>{
  try{
  const origin=`${req.headers['x-forwarded-proto']==='https'||process.env.COOKIE_SECURE==='1'?'https':'http'}://${req.headers.host}`,url=new URL(req.url,origin);
+ const trafficHeaders=new Headers(req.headers);trafficHeaders.set('CF-Connecting-IP',req.socket.remoteAddress||'local');
+ const trafficRequest=new Request(url,{method:req.method,headers:trafficHeaders}),started=Date.now(),reason=blockedRequest(trafficRequest);
+ res.once('finish',()=>{recordTraffic({request:trafficRequest,env:serviceEnv},new Response(null,{status:res.statusCode,headers:res.getHeaders()}),started,reason).catch(()=>telemetryFailure(serviceEnv));});
+ if(reason){res.writeHead(404,{'Content-Type':'text/plain','Cache-Control':'no-store'});res.end('Not found');return;}
+ if(req.method==='GET'&&(url.pathname==='/'||url.pathname==='/ckunstudio/verify/')){
+  const protection=await verificationSettings(db,serviceEnv);
+  if(protection.mode!=='off'&&(protection.protectSite||url.pathname==='/ckunstudio/verify/')&&!await hasClearance(serviceEnv,trafficRequest)){const response=verificationPage();res.writeHead(response.status,Object.fromEntries(response.headers));res.end(await response.text());return;}
+  if(url.pathname==='/ckunstudio/verify/'){res.writeHead(303,{Location:'/'});res.end();return;}
+ }
  if(url.pathname.startsWith('/api/')){
    const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>12*1024*1024){res.writeHead(413);res.end('{"error":"请求过大"}');return;}chunks.push(chunk);}
-   const request=new Request(url,{method:req.method,headers:req.headers,...(!['GET','HEAD'].includes(req.method)?{body:Buffer.concat(chunks)}:{})});
-   const response=await onRequest({request,env:{STUDIO_DB:db,STUDIO_AUTH_SECRET:'local-development-secret-not-used-for-scrypt',LOCAL_MODE:true,LOCAL_VERIFY:(password,user)=>timingSafeEqual(scryptSync(password,user.salt,64),Buffer.from(user.password,'hex'))}});
+   const request=new Request(url,{method:req.method,headers:trafficHeaders,...(!['GET','HEAD'].includes(req.method)?{body:Buffer.concat(chunks)}:{})});
+   const response=await onRequest({request,env:serviceEnv});
    res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()));return;
  }
+ if(url.pathname==='/ckunstudio/verify.js'||url.pathname==='/ckunstudio/verify.css'){const name=url.pathname.split('/').pop();res.writeHead(200,{'Content-Type':name.endsWith('.js')?'text/javascript':'text/css','Cache-Control':'no-cache'});res.end(name==='verify.js'?verifyAssets[name].toString().replaceAll('/ckunstudio/api/','/api/'):verifyAssets[name]);return;}
  const files={'/':['index.html','text/html'],'/app.js':['app.js','text/javascript'],'/task-catalog.js':['task-catalog.js','text/javascript'],'/style.css':['style.css','text/css']};const file=files[url.pathname];
  if(!file||req.method!=='GET'){res.writeHead(404);res.end();return;}
  res.writeHead(200,{'Content-Type':file[1]+'; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY','Content-Security-Policy':"default-src 'self'; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"});res.end(assets[file[0]]);

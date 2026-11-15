@@ -141,3 +141,15 @@ test('浏览器历史：取消丢弃编辑时恢复历史位置和未保存内�
  await ui.history.go(-1);assert.equal(ui.run('page'),'editor');assert.equal(ui.run('dirty'),true);assert.equal(ui.run('undoingNavigation'),false);
  await ui.run('confirmDialog=async()=>true');await ui.history.go(-1);assert.equal(ui.run('page'),'list');
 });
+
+test('头像缓存：并发只下载一次、重载复用本地数据、版本变化才重新下载',async()=>{
+ const ui=browserHarness(),values=new Map();let requests=0;
+ const storage={getItem:key=>values.get(key)||null,setItem:(key,value)=>values.set(key,value)};
+ const image='data:image/png;base64,iVBORw0KGgo=';
+ const install=fixture=>{fixture.context.localStorage=storage;fixture.context.fetch=async()=>{requests++;return {ok:true,blob:async()=>({size:8,type:'image/png'})};};fixture.context.FileReader=class{readAsDataURL(){this.result=image;this.onload();}};};install(ui);
+ await ui.run("user={id:'cache-user',name:'甲',avatar_version:'v1'};await Promise.all([loadAvatar(user),loadAvatar(user)]);");assert.equal(requests,1);
+ await ui.run('await loadAvatar(user)');assert.equal(requests,1);
+ const reloaded=browserHarness();install(reloaded);await reloaded.run("user={id:'cache-user',name:'甲',avatar_version:'v1'};await loadAvatar(user)");assert.equal(requests,1);
+ await reloaded.run("user.avatar_version='v2';await loadAvatar(user)");assert.equal(requests,2);assert.match(values.get('ckunstudio-avatar:cache-user'),/v2/);
+ await reloaded.run("user.avatar_version='';await loadAvatar(user)");assert.equal(requests,2);
+});
