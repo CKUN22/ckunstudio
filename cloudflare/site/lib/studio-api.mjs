@@ -1,5 +1,4 @@
 import {verificationSettings,makeChallenge,solveChallenge,hasClearance} from './verification.mjs';
-import {trafficReport} from './telemetry.mjs';
 import { TASK_CATEGORIES, inferTaskCategory, MAX_TASK_TAGS, normalizeTags, tagsFor } from './task-catalog.mjs';
 const BASE = '/ckunstudio/api';
 const COOKIE = 'ckunstudio_session';
@@ -128,6 +127,7 @@ export async function onRequest(context) {
       const protection=await verificationSettings(db,env);
       if(protection.mode!=='off'&&!await hasClearance(env,request))fail(403,'请先完成网站访问验证，再登录或注册');
     }
+    if(route.startsWith('/admin/'))fail(404,'接口已移至独立的网站后台');
     if (route === '/setup' && request.method === 'GET') {
       return json(200, { needsSetup: !await db.prepare('SELECT id FROM studio_users LIMIT 1').first(), setupKeyRequired: !env.LOCAL_MODE });
     }
@@ -180,8 +180,6 @@ export async function onRequest(context) {
     const token = sessionToken(request);
     const user = token && await db.prepare(`SELECT u.id,COALESCE(NULLIF(u.nickname,''),u.name) AS name,u.name AS loginName,u.nickname,u.avatar_version,u.role,u.color FROM studio_sessions s JOIN studio_users u ON u.id=s.user_id WHERE s.token=? AND s.expires>? AND u.active=1`).bind(await sha(token), Date.now()).first();
     if (!user) fail(401, '登录已失效或你已被移出团队，请重新登录或联系队长');
-    const adminIds=(env.SITE_ADMIN_USER_IDS||'').split(',').map(x=>x.trim()).filter(Boolean);
-    user.siteAdmin=adminIds.length?adminIds.includes(user.id):user.role==='captain';
     if (route === '/me' && request.method === 'PUT') {
       await rateLimit(db,request,'profile:'+user.id);
       const data=await readBody(request),nickname=text(data.nickname,40,true);
@@ -207,22 +205,6 @@ export async function onRequest(context) {
       if(request.headers.get('If-None-Match')===etag)return new Response(null,{status:304,headers});
       const bytes=Uint8Array.from(atob(image.data),c=>c.charCodeAt(0));
       return new Response(bytes,{headers:{...headers,'Content-Length':String(bytes.length)}});
-    }
-    if(route==='/admin/verification'){
-      if(!user.siteAdmin)fail(403,'仅网站管理员可修改验证设置');
-      if(request.method==='GET')return json(200,await verificationSettings(db,env));
-      if(request.method==='PUT'){
-        const data=await readBody(request);
-        if(!['auto','manual','turnstile','off'].includes(data.mode)||typeof data.protectSite!=='boolean')fail(400,'验证设置无效');
-        const settings=await verificationSettings(db,env);
-        if(data.mode==='turnstile'&&!settings.turnstileConfigured)fail(400,'请先配置 TURNSTILE_SITE_KEY 和 TURNSTILE_SECRET_KEY');
-        await db.batch([db.prepare("INSERT INTO studio_settings(key,value) VALUES('site_verification',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify({mode:data.mode,protectSite:data.protectSite})),activity(db,user,'verification-settings','site')]);
-        return json(200,await verificationSettings(db,env));
-      }
-    }
-    if(route==='/admin/analytics'&&request.method==='GET'){
-      if(!user.siteAdmin)fail(403,'仅网站管理员可查看统计');
-      return json(200,await trafficReport(db,url));
     }
     if (route === '/me' && request.method === 'GET') {
       const invite=user.role==='captain' ? (await db.prepare('SELECT code FROM studio_invites WHERE revoked=0 AND expires>? AND uses<max_uses ORDER BY created DESC LIMIT 1').bind(Date.now()).first())?.code : undefined;

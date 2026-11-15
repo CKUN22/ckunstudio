@@ -1,3 +1,4 @@
+import {onRequest as adminRequest} from './cloudflare/site/lib/site-admin-api.mjs';
 import {verificationSettings,hasClearance,verificationPage} from './cloudflare/site/lib/verification.mjs';
 import {blockedRequest,recordTraffic,telemetryFailure} from './cloudflare/site/lib/telemetry.mjs';
 import {scryptSync,timingSafeEqual} from 'node:crypto';
@@ -35,6 +36,7 @@ function statement(sql){let values=[];return {bind(...args){values=args;return t
 const db={prepare:statement,async batch(statements){sqlite.exec('BEGIN IMMEDIATE');try{const results=statements.map(s=>s.execute());sqlite.exec('COMMIT');return results;}catch(e){sqlite.exec('ROLLBACK');throw e;}}};
 // Keep browser assets paired with the API loaded by this process until restart.
 const verifyAssets=Object.fromEntries(['verify.js','verify.css'].map(name=>[name,readFileSync(path.join(root,'cloudflare/site/public/ckunstudio',name))]));
+const adminAssets=Object.fromEntries(['index.html','admin.js','admin.css'].map(name=>[name,readFileSync(path.join(root,'cloudflare/site/public/admin',name))]));
 const assets=Object.fromEntries(['index.html','app.js','style.css','task-catalog.js'].map(name=>[name,readFileSync(path.join(root,'public',name))]));
 const serviceEnv={STUDIO_DB:db,STUDIO_AUTH_SECRET:process.env.STUDIO_AUTH_SECRET||'local-development-secret-not-used-for-scrypt',LOCAL_MODE:true,TURNSTILE_SITE_KEY:process.env.TURNSTILE_SITE_KEY,TURNSTILE_SECRET_KEY:process.env.TURNSTILE_SECRET_KEY,SITE_ADMIN_USER_IDS:process.env.SITE_ADMIN_USER_IDS,LOCAL_VERIFY:(password,user)=>timingSafeEqual(scryptSync(password,user.salt,64),Buffer.from(user.password,'hex'))};
 const server=http.createServer(async(req,res)=>{
@@ -44,16 +46,23 @@ const server=http.createServer(async(req,res)=>{
  const trafficRequest=new Request(url,{method:req.method,headers:trafficHeaders}),started=Date.now(),reason=blockedRequest(trafficRequest);
  res.once('finish',()=>{recordTraffic({request:trafficRequest,env:serviceEnv},new Response(null,{status:res.statusCode,headers:res.getHeaders()}),started,reason).catch(()=>telemetryFailure(serviceEnv));});
  if(reason){res.writeHead(404,{'Content-Type':'text/plain','Cache-Control':'no-store'});res.end('Not found');return;}
- if(req.method==='GET'&&(url.pathname==='/'||url.pathname==='/ckunstudio/verify/')){
+ if(req.method==='GET'&&(url.pathname==='/'||url.pathname==='/ckunstudio/verify/'||url.pathname==='/admin/'||url.pathname==='/admin'||url.pathname==='/admin/verify/')){
   const protection=await verificationSettings(db,serviceEnv);
-  if(protection.mode!=='off'&&(protection.protectSite||url.pathname==='/ckunstudio/verify/')&&!await hasClearance(serviceEnv,trafficRequest)){const response=verificationPage();res.writeHead(response.status,Object.fromEntries(response.headers));res.end(await response.text());return;}
+  if(protection.mode!=='off'&&(protection.protectSite||url.pathname==='/ckunstudio/verify/'||url.pathname==='/admin/verify/')&&!await hasClearance(serviceEnv,trafficRequest)){const response=verificationPage();res.writeHead(response.status,Object.fromEntries(response.headers));res.end(await response.text());return;}
+  if(url.pathname==='/admin/verify/'){res.writeHead(303,{Location:'/admin/'});res.end();return;}
   if(url.pathname==='/ckunstudio/verify/'){res.writeHead(303,{Location:'/'});res.end();return;}
  }
- if(url.pathname.startsWith('/api/')){
+ if(url.pathname.startsWith('/api/')||url.pathname.startsWith('/admin/api/')){
    const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>12*1024*1024){res.writeHead(413);res.end('{"error":"请求过大"}');return;}chunks.push(chunk);}
    const request=new Request(url,{method:req.method,headers:trafficHeaders,...(!['GET','HEAD'].includes(req.method)?{body:Buffer.concat(chunks)}:{})});
-   const response=await onRequest({request,env:serviceEnv});
+   const response=await (url.pathname.startsWith('/admin/api/')?adminRequest:onRequest)({request,env:serviceEnv});
    res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()));return;
+ }
+ if(url.pathname==='/admin'){res.writeHead(308,{Location:'/admin/'});res.end();return;}
+ if(url.pathname.startsWith('/admin/')){
+  const name=url.pathname==='/admin/'?'index.html':url.pathname.slice('/admin/'.length),asset=adminAssets[name];
+  if(!asset||req.method!=='GET'){res.writeHead(404);res.end();return;}
+  res.writeHead(200,{'Content-Type':(name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':'text/html')+'; charset=utf-8','Cache-Control':'no-store','X-Robots-Tag':'noindex, nofollow','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY','Content-Security-Policy':"default-src 'self'; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"});res.end(asset);return;
  }
  if(url.pathname==='/ckunstudio/verify.js'||url.pathname==='/ckunstudio/verify.css'){const name=url.pathname.split('/').pop();res.writeHead(200,{'Content-Type':name.endsWith('.js')?'text/javascript':'text/css','Cache-Control':'no-cache'});res.end(name==='verify.js'?verifyAssets[name].toString().replaceAll('/ckunstudio/api/','/api/'):verifyAssets[name]);return;}
  const files={'/':['index.html','text/html'],'/app.js':['app.js','text/javascript'],'/task-catalog.js':['task-catalog.js','text/javascript'],'/style.css':['style.css','text/css']};const file=files[url.pathname];

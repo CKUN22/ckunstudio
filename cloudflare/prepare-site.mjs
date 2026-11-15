@@ -36,7 +36,7 @@ await cp(path.join(appRoot, 'public/style.css'), path.join(assets, 'style.css'))
 
 if (destination) {
   // Copy only the integration's named paths. Preserve the rest of the personal site.
-  for (const relative of ['functions/ckunstudio', 'functions/_middleware.js', 'lib', 'migrations/studio', 'public/ckunstudio']) {
+  for (const relative of ['functions/ckunstudio', 'functions/_middleware.js', 'functions/admin', 'lib', 'migrations/studio', 'public/ckunstudio', 'public/admin']) {
     await cp(path.join(staged, relative), path.join(destination, relative), { recursive: true });
   }
   for (const name of ['_headers', '_routes.json']) {
@@ -44,7 +44,8 @@ if (destination) {
     let exists = false; try { await access(target); exists = true; } catch {}
     if (exists && await readFile(target, 'utf8') !== await readFile(path.join(staged, 'public', name), 'utf8')) {
       const previous=name==='_routes.json'?JSON.parse(await readFile(target,'utf8')):null;
-      if(!previous||previous.version!==1||JSON.stringify(previous.include)!==JSON.stringify(['/ckunstudio/api/*'])||previous.exclude?.length)throw new Error(`Review existing public/${name} before merging`);
+      const safeHeaderAppend=name==='_headers'&&(await readFile(path.join(staged,'public',name),'utf8')).startsWith((await readFile(target,'utf8')).trimEnd());
+      if(!safeHeaderAppend&&(!previous||previous.version!==1||JSON.stringify(previous.include)!==JSON.stringify(['/ckunstudio/api/*'])||previous.exclude?.length))throw new Error(`Review existing public/${name} before merging`);
     }
     await cp(path.join(staged, 'public', name), target);
   }

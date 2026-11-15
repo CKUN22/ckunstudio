@@ -12,7 +12,7 @@ function normalizedPath(url) {
 export async function recordTraffic({request,env}, response, started = Date.now(), reason = '') {
  if (!env.STUDIO_DB || !env.STUDIO_AUTH_SECRET) return;
  const url = new URL(request.url);
- if (url.pathname.includes('/api/admin/')) return;
+ if (url.pathname==='/admin'||url.pathname.startsWith('/admin/')||url.pathname.includes('/api/admin/')) return;
  // Successful background sync and cached avatar reads must not amplify D1 writes.
  if(request.method==='GET'&&response.status<400&&/\/api\/(?:items|users|notifications|me|setup|avatars(?:\/[^/]+)?)$/.test(url.pathname))return; // Reading reports must not change the reports.
  const day = chinaDay(), path = normalizedPath(url), studio = /^\/ckunstudio(?:\/|$)/.test(path) || env.LOCAL_MODE;
